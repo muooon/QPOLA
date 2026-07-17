@@ -38,6 +38,16 @@ template <> __device__ __forceinline__ __nv_fp8_e5m2 from_float<__nv_fp8_e5m2>(f
     return __nv_fp8_e5m2(val); // 変換コンストラクタを利用
 }
 
+// 3. 型ごとの適切な最小係数(下限)ヘルパ：7. 極座標型無次元更新へ
+template <typename T> __device__ __forceinline__ float get_min_p_factor();
+
+template <> __device__ __forceinline__ float get_min_p_factor<float>()           { return 0.01f; } // FP32は精密に
+template <> __device__ __forceinline__ float get_min_p_factor<__half>()          { return 0.01f; } // FP16も精密に
+template <> __device__ __forceinline__ float get_min_p_factor<__nv_bfloat16>()  { return 0.05f; } // BF16は少し粗い
+template <> __device__ __forceinline__ float get_min_p_factor<signed char>()    { return 0.15f; } // INT8はかなり粗いので高く
+template <> __device__ __forceinline__ float get_min_p_factor<__nv_fp8_e4m3>()  { return 0.10f; } // FP8も高めに
+template <> __device__ __forceinline__ float get_min_p_factor<__nv_fp8_e5m2>()  { return 0.10f; }
+
 // =========================================================================
 // QPOLA コアロジック (__device__ 関数にしてカーネルからの呼出し許可)
 // =========================================================================
@@ -65,7 +75,7 @@ __device__ __forceinline__ void qpola_kernel_impl(
 
     // 2. QJL代替(符号情報)
     float g_sign = (g_val > 0.0f) ? 1.0f : ((g_val < 0.0f) ? -1.0f : 0.0f);
-    
+
     float warp_direction_sum = g_sign;
     float warp_p_abs_sum = fabsf(p_val);
 
@@ -85,7 +95,7 @@ __device__ __forceinline__ void qpola_kernel_impl(
     if (lane == 0) {
         s_block_direction[warp_id] = micro_direction_sum;
     }
-    
+
     // ブロック内の全スレッドが揃うまで確実に待機(途中 return させない)
     __syncthreads(); 
 
@@ -103,21 +113,24 @@ __device__ __forceinline__ void qpola_kernel_impl(
     float micro_align = g_sign * micro_direction_mean; 
     float macro_align = g_sign * macro_direction_mean; 
 
-    // 6. 極座標型アライメント制御(オーバーシュート防止型)
-    float adaptation_factor = 1.0f;
-    if (micro_align >= 0.0f && macro_align >= 0.0f) {
-        // アライメント一致(主軸)：余計なブーストはせずベース(1.0)を維持して確実に収束させる
-        adaptation_factor = 1.0f; 
-    } else {
-        // アライメント不一致(対立･ノイズ)：不一致度(conflict)に応じてブレーキをかける
-        float conflict = (fabsf(micro_align) + fabsf(macro_align)) * 0.5f;  
-        adaptation_factor = fmaxf(1.0f - conflict * 0.95f, 0.01f);
-    }
+    // 6. 極座標型アライメント制御(オーバーシュート防止型：滑らか･分岐なし：信頼度判定)
+    // micro_align と macro_align が負(逆方向)に振れれば振れるほど conflict(不一致度)が大きくなる
+    // 完全に一致(ともに最大値 1.0)のときは conflict = 0.0 になり、factor = 1.0f となる
+    float diff_micro = 1.0f - micro_align;
+    float diff_macro = 1.0f - macro_align;
+    float conflict = (diff_micro + diff_macro) * 0.5f; // 0.0(完全一致) ～ 2.0(完全反転)
 
-    // 7. 極座標型無次元更新
-    float local_p_factor = fmaxf(fabsf(p_val), warp_p_scale * 0.1f);
+    // 不一致度に応じて滑らかに減衰(係数の 0.495f は conflict=2.0 のときに最低値 0.01 になる調整値)
+    float adaptation_factor = 1.0f - conflict * 0.495f;
+
+    // 最低値を 0.01(1%)、最高値を 1.0(100%)に安全クリップ(分岐なしの組み込み関数)
+    adaptation_factor = fminf(fmaxf(adaptation_factor, 0.01f), 1.0f);
+
+    // 7. 極座標型無次元更新(型に応じて係数を自動切り替え)
+    float min_ratio = get_min_p_factor<T>(); 
+    float local_p_factor = fmaxf(fabsf(p_val), warp_p_scale * min_ratio);
     float update_scale = local_p_factor * adaptation_factor;
-    
+
     // 8. パラメータの更新と再量子化書戻し
     float next_p = p_val - (base_lr * g_sign * update_scale);
     p[idx] = from_float<T>(next_p);
