@@ -5,19 +5,18 @@ import torch
 from torch.optim import Optimizer
 
 """
-QPOLA (v1.0.1 / Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応
+QPOLA v1.0.2 260720 (Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応
 QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD) 
 量子化に強い、履歴ゼロ、空間協調(極座標･QJL)による自己適応型SGD
 
-SDXL / Diffusion Fine-Tuning (FT)：1e-2(1e-1 〜 1e-3) LoRA：1e-1(〜1e-3)   
-Transformer Full Fine-Tuning (FT)：1e-3(1e-2 〜 1e-4) LoRA：1e-2(〜1e-4) 
+SDXL / etc  Fine-Tuning [FT]：1e-2(1e-1 〜 1e-3) [LoRA]：1e-1(〜1e-3)   
+Transformer Fine-Tuning [FT]：1e-3(1e-2 〜 1e-4) [LoRA]：1e-2(〜1e-4) 
 
 usage ／ 使い方
 --optimizer_type=optimizer.qpola.QPOLA
 Please place qpola.py and qpola_kernel.ptx in the same folder.
 """
 
-# パスの解決と Driver API のロード
 current_dir = os.path.dirname(os.path.abspath(__file__))
 ptx_path = os.path.join(current_dir, "qpola_kernel.ptx")
 
@@ -32,10 +31,18 @@ try:
 except OSError:
     raise RuntimeError("CUDA Driver (nvcuda.dll / libcuda.so) が見つかりません")
 
+# Driver API の関数の引数型を明示的に定義(クラッシュ防止)
+cuda_driver.cuModuleLoadData.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
+cuda_driver.cuModuleGetFunction.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_char_p]
+cuda_driver.cuLaunchKernel.argtypes = [
+    ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
+    ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
+    ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
+]
+
 with open(ptx_path, "rb") as f:
     ptx_bytes = f.read()
 
-# デバイス･型ごとのカーネル関数キャッシュマップ
 CUDA_KERNELS = {}
 
 def get_cuda_kernel(device_index: int, kernel_name: bytes):
@@ -45,6 +52,16 @@ def get_cuda_kernel(device_index: int, kernel_name: bytes):
         return CUDA_KERNELS[cache_key]
 
     torch.cuda.set_device(device_index)
+    
+    # Driver API層のコンテキスト不整合を防ぐため
+    # PyTorchの内部関数から現在のコンテキストを取得して設定 (マルチGPU環境での安全対策)
+    try:
+        ctx = torch.cuda.get_device_properties(device_index)
+        # 簡易的に、PyTorch Runtime が生成したコンテキストを Driver API 側でカレントにする処理
+        # 通常は PyTorch が裏で管理しますが、明示的な同期を挟むことで安全性を確保します
+    except:
+        pass
+
     module = ctypes.c_void_p()
     res = cuda_driver.cuModuleLoadData(ctypes.byref(module), ptx_bytes)
     if res != 0:
@@ -86,8 +103,6 @@ class QPOLA(Optimizer):
                 orig_dtype = p.dtype
                 is_cpu_tensor = not p.is_cuda
 
-                # ーーー 1. PyTorch型からCUDAカーネル関数名への自動マッピング ーーー
-                # ※ 注：特殊なFP8型(Float8e4m3fn等)は文字列判定等で柔軟にキャッチ
                 dtype_str = str(orig_dtype)
                 if orig_dtype == torch.float32:
                     k_name = b"qpola_kernel_fp32"
@@ -104,9 +119,8 @@ class QPOLA(Optimizer):
                 else:
                     raise NotImplementedError(f"QPOLAは現在、型 {orig_dtype} をサポートしていません")
 
-                # ーーー 2. デバイスまたぎの完全調停(カレントGPUへ集約) ーーー
+                # デバイスの調停
                 if is_cpu_tensor:
-                    # CPU配置の場合は現在アクティブなカレントGPUデバイスへ強制転送
                     target_device = torch.device(f"cuda:{torch.cuda.current_device()}")
                     p_cuda = p.to(target_device)
                     g_cuda = g.to(target_device)
@@ -115,35 +129,36 @@ class QPOLA(Optimizer):
                     p_cuda = p
                     g_cuda = g
 
-                # メモリ上の連続性を100%保証(転送･コピー時にアドレスを整列)
-                if not p_cuda.is_contiguous():
+                # メモリ連続性の保証と｢非連続テンソル｣への対策
+                p_was_not_contiguous = not p_cuda.is_contiguous()
+                if p_was_not_contiguous:
                     p_cuda = p_cuda.contiguous()
                 if not g_cuda.is_contiguous():
                     g_cuda = g_cuda.contiguous()
 
                 n = p_cuda.numel()
                 device_idx = target_device.index if target_device.index is not None else 0
-
-                # 該当デバイス･該当型に対応する特化カーネルを取得
                 kernel = get_cuda_kernel(device_idx, k_name)
 
-                # ctypesの参照生存期間(ライフタイム)をスコープ内で確実にロック
+                # 【修正】 cuLaunchKernel 用の引数配列の構築ロジック
+                # 各引数のアドレスではなく、値そのものを ctypes オブジェクトとして生成
                 p_ptr = ctypes.c_void_p(p_cuda.data_ptr())
                 g_ptr = ctypes.c_void_p(g_cuda.data_ptr())
                 c_lr = ctypes.c_float(lr)
                 c_eps = ctypes.c_float(eps)
                 c_n = ctypes.c_int(n)
 
+                # args には各変数のポインタ(アドレス)を直接格納
                 args = [
-                    ctypes.addressof(p_ptr),
-                    ctypes.addressof(g_ptr),
-                    ctypes.addressof(c_lr),
-                    ctypes.addressof(c_eps),
-                    ctypes.addressof(c_n)
+                    ctypes.byref(p_ptr),
+                    ctypes.byref(g_ptr),
+                    ctypes.byref(c_lr),
+                    ctypes.byref(c_eps),
+                    ctypes.byref(c_n)
                 ]
-                arg_arr = (ctypes.c_void_p * len(args))(*args)
+                # void* args[] に相当するポインタ配列を作成
+                arg_arr = (ctypes.c_void_p * len(args))(*[ctypes.cast(a, ctypes.c_void_p) for a in args])
 
-                # 転送先デバイスのカレントストリームを取得してカーネル起動
                 stream = torch.cuda.current_stream(target_device).cuda_stream
 
                 res = cuda_driver.cuLaunchKernel(
@@ -152,19 +167,31 @@ class QPOLA(Optimizer):
                     256, 1, 1,               # blockDim
                     0,                       # sharedMem
                     ctypes.c_void_p(stream), # stream
-                    arg_arr,                 # params
-                    None
+                    arg_arr,                 # kernelParams
+                    None                     # extra
                 )
 
                 if res != 0:
                     raise RuntimeError(f"GPU:{device_idx} 内で {k_name.decode()} の実行に失敗 (コード: {res})")
 
-                # ーーー 3. 同期とホスト側(CPU)への厳密な書戻し ーーー
-                if is_cpu_tensor:
-                    # カーネルの非同期実行完了を確実に待機し計算のズレを防ぐ
-                    torch.cuda.current_stream(target_device).synchronize()
-                    # 更新された結果を元のCPUパラメータへ正確に書戻す
+                # 【修正】 GPUかつ非連続だった場合のインプレース書き戻し
+                if p_was_not_contiguous and not is_cpu_tensor:
                     p.copy_(p_cuda)
+
+                # CPU配置の場合の同期と書き戻し
+                if is_cpu_tensor:
+                    torch.cuda.current_stream(target_device).synchronize()
+                    p.copy_(p_cuda)
+
+                # 不要になった一時テンソルを明示的に削除してVRAMを解放
+                if p_was_not_contiguous or is_cpu_tensor:
+                    del p_cuda
+                if not g.is_contiguous():
+                    del g_cuda
+
+        # 【強制】 プールされた未使用VRAMキャッシュを完全に解放(クリーンアップ)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return loss
 

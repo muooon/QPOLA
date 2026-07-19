@@ -128,7 +128,15 @@ __device__ __forceinline__ void qpola_kernel_impl(
 
     // 7. 極座標型無次元更新(型に応じて係数を自動切り替え)
     float min_ratio = get_min_p_factor<T>(); 
-    float local_p_factor = fmaxf(fabsf(p_val), warp_p_scale * min_ratio);
+    // float local_p_factor = fmaxf(log1pf((float)fabsf(p_val)), log1pf((float)warp_p_scale) * min_ratio);
+    // データ型(T)が許容できる｢落差の最大限｣(1 / min_ratio)でブレーキ閾値を自動逆算
+    // 【無次元化】 周囲のスケール(warp_p_scale)を基準にブレーキの強さを自律決定する
+    // 係数に「min_ratio」をそのまま使うことで、型に応じた最適なセーフティネットが自動構成される
+    float scale_inv = 1.0f / fmaxf(warp_p_scale, 1e-4f);
+    float soft_p = fabsf(p_val) / (1.0f + min_ratio * fabsf(p_val) * scale_inv) ;
+    float soft_warp = warp_p_scale / (1.0f + min_ratio * warp_p_scale * scale_inv);
+    // アーキテクチャやハードウェアなどに依存しない log 的制動を統合する
+    float local_p_factor = fmaxf(soft_p, soft_warp * min_ratio);
     float update_scale = local_p_factor * adaptation_factor;
 
     // 8. パラメータの更新と再量子化書戻し
