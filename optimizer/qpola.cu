@@ -1,3 +1,7 @@
+// =========================================================================
+// QPOLA カーネルコア v1.0.2 260720 by muooon https://github.com/muooon/QPOLA
+// =========================================================================
+
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <math.h>
@@ -24,18 +28,29 @@ __device__ __forceinline__ float to_float(__nv_fp8_e5m2 val) { return static_cas
 
 // 2. メモリへの書き戻し時：FP32から元のターゲット型へキャスト(安全装置付き)
 template <typename T> __device__ __forceinline__ T from_float(float val);
-template <> __device__ __forceinline__ float from_float<float>(float val) { return val; }
-template <> __device__ __forceinline__ __half from_float<__half>(float val) { return __float2half(val); }
-template <> __device__ __forceinline__ __nv_bfloat16 from_float<__nv_bfloat16>(float val) { return __float2bfloat16(val); }
+template <> __device__ __forceinline__ float from_float<float>(float val) { 
+    return val; 
+}
+template <> __device__ __forceinline__ __half from_float<__half>(float val) { 
+    // FP16の限界値 [-65504.0, 65504.0] でガード
+    return __float2half(fmaxf(-65504.0f, fminf(65504.0f, val))); 
+}
+template <> __device__ __forceinline__ __nv_bfloat16 from_float<__nv_bfloat16>(float val) { 
+    // BF16はFP32と同じ範囲まで表現できますが、異常値防止としてFP16と同じ範囲か、
+    // あるいは少し広めの妥当な値(例: 65504.0f)で念のため縛っておくと安全です
+    return __float2bfloat16(fmaxf(-65504.0f, fminf(65504.0f, val))); 
+}
 template <> __device__ __forceinline__ signed char from_float<signed char>(float val) { 
-    // INT8有効範囲 [-128, 127] にクリップしオーバーフローを防ぐ
+    // INT8有効範囲 [-128, 127] にクリップしオーバーフローを防ぐ (既存のまま)
     return static_cast<signed char>(fmaxf(-128.0f, fminf(127.0f, val))); 
 }
 template <> __device__ __forceinline__ __nv_fp8_e4m3 from_float<__nv_fp8_e4m3>(float val) { 
-    return __nv_fp8_e4m3(val); // 変換コンストラクタを利用
+    // FP8 E4M3 の絶対的な最大値は 448.0f です(超えると一発アウトなので厳重にガード)
+    return __nv_fp8_e4m3(fmaxf(-448.0f, fminf(448.0f, val))); 
 }
 template <> __device__ __forceinline__ __nv_fp8_e5m2 from_float<__nv_fp8_e5m2>(float val) { 
-    return __nv_fp8_e5m2(val); // 変換コンストラクタを利用
+    // FP8 E5M2 の最大値は 57344.0f です
+    return __nv_fp8_e5m2(fmaxf(-57344.0f, fminf(57344.0f, val))); 
 }
 
 // 3. 型ごとの適切な最小係数(下限)ヘルパ：7. 極座標型無次元更新へ
@@ -60,7 +75,7 @@ __device__ __forceinline__ void qpola_kernel_impl(
     int n
 ) {
     // 共有メモリ：ブロック全体(8ワープ)の方向和
-    __shared__ float s_block_direction[BLOCK_SIZE / WARP_SIZE]; 
+    // __shared__ float s_block_direction[BLOCK_SIZE / WARP_SIZE]; (元設計)
 
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     int lane = threadIdx.x % WARP_SIZE;
@@ -68,6 +83,9 @@ __device__ __forceinline__ void qpola_kernel_impl(
 
     // 1. 境界内かどうかのフラグ
     bool is_active = (idx < n);
+
+    // 有効なスレッドなら1.0f、無効なら0.0fをセット
+    float active_count = is_active ? 1.0f : 0.0f; 
 
     // 各型(T)のポインタから正しいビット幅で読出し即座に内部計算用の float へ変換
     float g_val = is_active ? to_float(g[idx]) : 0.0f;
@@ -79,32 +97,47 @@ __device__ __forceinline__ void qpola_kernel_impl(
     float warp_direction_sum = g_sign;
     float warp_p_abs_sum = fabsf(p_val);
 
-    // ワープシャッフル(FP32レジスタのまま実行するため量子化による同期破壊を防止)
+    // ワープシャッフル(有効スレッド数も一緒に並列集計)
     #pragma unroll
     for (int offset = WARP_SIZE / 2; offset > 0; offset /= 2) {
         warp_direction_sum += __shfl_down_sync(0xffffffff, warp_direction_sum, offset);
-        warp_p_abs_sum += __shfl_down_sync(0xffffffff, warp_p_abs_sum, offset);
+        warp_p_abs_sum     += __shfl_down_sync(0xffffffff, warp_p_abs_sum, offset);
+        active_count       += __shfl_down_sync(0xffffffff, active_count, offset);
     }
 
     // ブロードキャスト
     float micro_direction_sum = __shfl_sync(0xffffffff, warp_direction_sum, 0);
-    float micro_direction_mean = micro_direction_sum / WARP_SIZE; 
-    float warp_p_scale = fmaxf(__shfl_sync(0xffffffff, warp_p_abs_sum, 0) / WARP_SIZE, 1e-4f);
+    float warp_p_scale_sum    = __shfl_sync(0xffffffff, warp_p_abs_sum, 0);
+    float warp_active_count   = __shfl_sync(0xffffffff, active_count, 0);
+
+    // 【重要】 固定値(32)ではなく、実際の有効数で割る(ゼロ除算防止に max を挟む)
+    float div_count = fmaxf(warp_active_count, 1.0f);
+    float micro_direction_mean = micro_direction_sum / div_count; 
+    float warp_p_scale         = fmaxf(warp_p_scale_sum / div_count, 1e-4f);
 
     // 3. マクロ集計(共有メモリへの書込み)
+    // ※ブロック全体(8ワープ)の｢方向和｣と｢有効スレッド数和｣のための共有メモリ
+    __shared__ float s_block_direction[BLOCK_SIZE / WARP_SIZE]; 
+    __shared__ float s_block_active[BLOCK_SIZE / WARP_SIZE];    // ★追加
+
     if (lane == 0) {
         s_block_direction[warp_id] = micro_direction_sum;
+        s_block_active[warp_id]    = warp_active_count;   // ★追加(各ワープの有効数を記録)
     }
 
-    // ブロック内の全スレッドが揃うまで確実に待機(途中 return させない)
+    // ブロック内の全スレッドが揃うまで確実に待機
     __syncthreads(); 
 
     float block_direction_sum = 0.0f;
+    float block_active_sum = 0.0f;                        // ★追加
     #pragma unroll
     for (int i = 0; i < BLOCK_SIZE / WARP_SIZE; ++i) {
         block_direction_sum += s_block_direction[i];
+        block_active_sum    += s_block_active[i];         // ★追加
     }
-    float macro_direction_mean = block_direction_sum / BLOCK_SIZE;
+    
+    // 【重要】 BLOCK_SIZE(256)固定ではなく実際の有効総数で割る
+    float macro_direction_mean = block_direction_sum / fmaxf(block_active_sum, 1.0f);
 
     // 4. すべての同期待ち･シャッフルの｢最後｣に書き込み対象外スレッドを保護
     if (!is_active) return;
@@ -131,7 +164,7 @@ __device__ __forceinline__ void qpola_kernel_impl(
     // float local_p_factor = fmaxf(log1pf((float)fabsf(p_val)), log1pf((float)warp_p_scale) * min_ratio);
     // データ型(T)が許容できる｢落差の最大限｣(1 / min_ratio)でブレーキ閾値を自動逆算
     // 【無次元化】 周囲のスケール(warp_p_scale)を基準にブレーキの強さを自律決定する
-    // 係数に「min_ratio」をそのまま使うことで、型に応じた最適なセーフティネットが自動構成される
+    // 係数に｢min_ratio｣をそのまま使うことで、型に応じた最適なセーフティネットが自動構成される
     float scale_inv = 1.0f / fmaxf(warp_p_scale, 1e-4f);
     float soft_p = fabsf(p_val) / (1.0f + min_ratio * fabsf(p_val) * scale_inv) ;
     float soft_warp = warp_p_scale / (1.0f + min_ratio * warp_p_scale * scale_inv);
