@@ -51,10 +51,11 @@ usage ／ 使い方
 Please place qpola.py and qpola_kernel.ptx in the same folder.  
 
 ### Quick Start & Recommended Learning Rates (LR)  
-QPOLAは従来のオプティマイザよりも大きな学習率(LR)を設定し高速かつシャープに収束します、  
+QPOLAは従来のオプティマイザよりも大きな学習率(LR)を設定します(最大値として機能します)、  
+(概ね AdamW(×100倍)相当です、AdamW：1e-4 ≈ QPOLA：1e-2 くらい)  
 
-*   **Transformer** Full Fine-Tuning (FT)：1e-3(1e-2 〜 1e-4) LoRA：1e-2(〜1e-4)  
-*   **SDXL / Diffusion** Fine-Tuning (FT)：1e-2(1e-1 〜 1e-3) LoRA：1e-1(〜1e-3)  
+*   **Transformer** Fine-Tuning (FT)：1e-3(以下) LoRA：1e-1(前後)  
+*   **SDXL / etc** Fine-Tuning (FT)：1e-4(以下) LoRA：1e-2(前後)  
 
 It prioritizes generality, autonomy, and adaptability in pursuit of new paths for optimization, efficiency, and simplicity.  
 In its development, we deeply appreciate the insights of those who came before us—and continue to explore new possibilities beyond them.  

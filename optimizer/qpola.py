@@ -5,13 +5,11 @@ import torch
 from torch.optim import Optimizer
 
 """
-QPOLA v1.0.2 260720 (Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応
-QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD) 
+QPOLA v1.0.2 260721 (Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応
+QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)
 量子化に強い、履歴ゼロ、空間協調(極座標･QJL)による自己適応型SGD
-
-SDXL / etc  Fine-Tuning [FT]：1e-2(1e-1 〜 1e-3) [LoRA]：1e-1(〜1e-3)   
-Transformer Fine-Tuning [FT]：1e-3(1e-2 〜 1e-4) [LoRA]：1e-2(〜1e-4) 
-
+QPOLAは従来のオプティマイザよりも大きな学習率(LR)を設定します(最大値として機能します)
+(概ね AdamW(×100倍)相当です、AdamW：1e-4 ≈ QPOLA：1e-2 くらい)
 usage ／ 使い方
 --optimizer_type=optimizer.qpola.QPOLA
 Please place qpola.py and qpola_kernel.ptx in the same folder.
@@ -32,13 +30,16 @@ except OSError:
     raise RuntimeError("CUDA Driver (nvcuda.dll / libcuda.so) が見つかりません")
 
 # Driver API の関数の引数型を明示的に定義(クラッシュ防止)
-cuda_driver.cuModuleLoadData.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p]
-cuda_driver.cuModuleGetFunction.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_char_p]
+cuda_driver.cuModuleLoadData.argtypes = [
+    ctypes.POINTER(ctypes.c_void_p), 
+    ctypes.c_void_p]
+cuda_driver.cuModuleGetFunction.argtypes = [
+    ctypes.POINTER(ctypes.c_void_p), 
+    ctypes.c_void_p, ctypes.c_char_p,]
 cuda_driver.cuLaunchKernel.argtypes = [
     ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
-    ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,
-    ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p
-]
+    ctypes.c_uint, ctypes.c_uint, ctypes.c_uint,ctypes.c_uint, 
+    ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
 
 with open(ptx_path, "rb") as f:
     ptx_bytes = f.read()
@@ -189,9 +190,9 @@ class QPOLA(Optimizer):
                 if not g.is_contiguous():
                     del g_cuda
 
-        # 【強制】 プールされた未使用VRAMキャッシュを完全に解放(クリーンアップ)
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        # 【強制】 プールされた未使用VRAMキャッシュ完全解放(クリーンアップ) 必要あれば "# 解除"
+        #if torch.cuda.is_available():
+        #    torch.cuda.empty_cache()
 
         return loss
 

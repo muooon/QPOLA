@@ -1,5 +1,5 @@
 // =========================================================================
-// QPOLA カーネルコア v1.0.2 260720 by muooon https://github.com/muooon/QPOLA
+// QPOLA カーネルコア v1.0.2 260721 by muooon https://github.com/muooon/QPOLA
 // =========================================================================
 
 #include <cuda_runtime.h>
@@ -11,6 +11,7 @@
 #include <cuda_bf16.h>
 #include <cuda_fp8.h>
 
+// ハードウェアに準ず [ROCm：warp32～64 iPEX：warp16～64]各変数名なども(要修正) 
 #define BLOCK_SIZE 256
 #define WARP_SIZE 32
 
@@ -18,50 +19,85 @@
 // 型ごとの固有処理を吸収するヘルパー(型トレイト)
 // =========================================================================
 
-// 1. メモリからの読込み時：各量子化型から高精度FP32へ変換
-__device__ __forceinline__ float to_float(float val) { return val; }
-__device__ __forceinline__ float to_float(__half val) { return __half2float(val); }
-__device__ __forceinline__ float to_float(__nv_bfloat16 val) { return __bfloat162float(val); }
-__device__ __forceinline__ float to_float(signed char val) { return static_cast<float>(val); }
-__device__ __forceinline__ float to_float(__nv_fp8_e4m3 val) { return static_cast<float>(val); } // 演算子による自動変換
-__device__ __forceinline__ float to_float(__nv_fp8_e5m2 val) { return static_cast<float>(val); } // 演算子による自動変換
+// 1. メモリからの読込み時：各量子化型からfp32へ変換
+__device__ __forceinline__ float to_float(float val)           { return val; }
+__device__ __forceinline__ float to_float(__half val)          { return __half2float(val); }
+__device__ __forceinline__ float to_float(__nv_bfloat16 val)   { return __bfloat162float(val); }
+__device__ __forceinline__ float to_float(signed char val)     { return static_cast<float>(val); }
+__device__ __forceinline__ float to_float(__nv_fp8_e4m3 val)   { return static_cast<float>(val); }
+__device__ __forceinline__ float to_float(__nv_fp8_e5m2 val)   { return static_cast<float>(val); }
 
-// 2. メモリへの書き戻し時：FP32から元のターゲット型へキャスト(安全装置付き)
+// 2. 型ごとの固有属性を一括管理する型トレイト (Traits)
+template <typename T> struct TypeTraits;
+
+template <> struct TypeTraits<float> {
+    // fp32 基準･すべてにおいて最も精密／最小係数：min_p_facter(精密)／ゼロ閾値：1e-16(安定)
+    static __device__ __forceinline__ float clamp_max()      { return 3.4e38f; }
+    static __device__ __forceinline__ float min_p_factor()   { return 0.01f; }
+    static __device__ __forceinline__ float zero_threshold() { return 1e-16f; }
+};
+
+template <> struct TypeTraits<__half> {
+    // fp16 有効値 [-65504.0, 65504.0]／最小係数：min_p_facter(精密)／ゼロ閾値：1e-6
+    static __device__ __forceinline__ float clamp_max()      { return 65504.0f; }
+    static __device__ __forceinline__ float min_p_factor()   { return 0.01f; }
+    static __device__ __forceinline__ float zero_threshold() { return 1e-6f; }
+};
+
+template <> struct TypeTraits<__nv_bfloat16> {
+    // bf16 有効値 [-65504.0, 65504.0]／最小係数：min_p_facter(少し粗い)／ゼロ閾値：1e-6
+    static __device__ __forceinline__ float clamp_max()      { return 65504.0f; }
+    static __device__ __forceinline__ float min_p_factor()   { return 0.05f; }
+    static __device__ __forceinline__ float zero_threshold() { return 1e-6f; }
+};
+
+template <> struct TypeTraits<signed char> {
+    // int8 有効値 [-128, 127]オーバーフロー防止／最小係数：min_p_facter(最も粗い)／ゼロ閾値：0.0
+    static __device__ __forceinline__ float clamp_max()      { return 127.0f; }
+    static __device__ __forceinline__ float min_p_factor()   { return 0.15f; }
+    static __device__ __forceinline__ float zero_threshold() { return 0.0f; }
+};
+
+template <> struct TypeTraits<__nv_fp8_e4m3> {
+    // fp8 e4m3 有効値 448.0f (厳重ガード)／最小係数：min_p_facter(粗い)／ゼロ閾値：2.0e-3
+    static __device__ __forceinline__ float clamp_max()      { return 448.0f; }
+    static __device__ __forceinline__ float min_p_factor()   { return 0.10f; }
+    static __device__ __forceinline__ float zero_threshold() { return 2.0e-3f; }
+};
+
+template <> struct TypeTraits<__nv_fp8_e5m2> {
+    // fp8 e5m2 有効値 57344.0f (厳重ガード)／最小係数：min_p_facter(粗い)／ゼロ閾値：2.0e-5
+    static __device__ __forceinline__ float clamp_max()      { return 57344.0f; }
+    static __device__ __forceinline__ float min_p_factor()   { return 0.10f; }
+    static __device__ __forceinline__ float zero_threshold() { return 2.0e-5f; }
+};
+
+// 3. メモリへの書き戻し時：fp32からターゲット型へキャスト (TypeTraits連動)
 template <typename T> __device__ __forceinline__ T from_float(float val);
-template <> __device__ __forceinline__ float from_float<float>(float val) { 
-    return val; 
-}
-template <> __device__ __forceinline__ __half from_float<__half>(float val) { 
-    // FP16の限界値 [-65504.0, 65504.0] でガード
-    return __float2half(fmaxf(-65504.0f, fminf(65504.0f, val))); 
-}
-template <> __device__ __forceinline__ __nv_bfloat16 from_float<__nv_bfloat16>(float val) { 
-    // BF16はFP32と同じ範囲まで表現できますが、異常値防止としてFP16と同じ範囲か、
-    // あるいは少し広めの妥当な値(例: 65504.0f)で念のため縛っておくと安全です
-    return __float2bfloat16(fmaxf(-65504.0f, fminf(65504.0f, val))); 
-}
-template <> __device__ __forceinline__ signed char from_float<signed char>(float val) { 
-    // INT8有効範囲 [-128, 127] にクリップしオーバーフローを防ぐ (既存のまま)
-    return static_cast<signed char>(fmaxf(-128.0f, fminf(127.0f, val))); 
-}
-template <> __device__ __forceinline__ __nv_fp8_e4m3 from_float<__nv_fp8_e4m3>(float val) { 
-    // FP8 E4M3 の絶対的な最大値は 448.0f です(超えると一発アウトなので厳重にガード)
-    return __nv_fp8_e4m3(fmaxf(-448.0f, fminf(448.0f, val))); 
-}
-template <> __device__ __forceinline__ __nv_fp8_e5m2 from_float<__nv_fp8_e5m2>(float val) { 
-    // FP8 E5M2 の最大値は 57344.0f です
-    return __nv_fp8_e5m2(fmaxf(-57344.0f, fminf(57344.0f, val))); 
-}
 
-// 3. 型ごとの適切な最小係数(下限)ヘルパ：7. 極座標型無次元更新へ
-template <typename T> __device__ __forceinline__ float get_min_p_factor();
-
-template <> __device__ __forceinline__ float get_min_p_factor<float>()           { return 0.01f; } // FP32は精密に
-template <> __device__ __forceinline__ float get_min_p_factor<__half>()          { return 0.01f; } // FP16も精密に
-template <> __device__ __forceinline__ float get_min_p_factor<__nv_bfloat16>()  { return 0.05f; } // BF16は少し粗い
-template <> __device__ __forceinline__ float get_min_p_factor<signed char>()    { return 0.15f; } // INT8はかなり粗いので高く
-template <> __device__ __forceinline__ float get_min_p_factor<__nv_fp8_e4m3>()  { return 0.10f; } // FP8も高めに
-template <> __device__ __forceinline__ float get_min_p_factor<__nv_fp8_e5m2>()  { return 0.10f; }
+template <> __device__ __forceinline__ float from_float<float>(float val) {
+    return val;
+}
+template <> __device__ __forceinline__ __half from_float<__half>(float val) {
+    float max_v = TypeTraits<__half>::clamp_max();
+    return __float2half(fmaxf(-max_v, fminf(max_v, val)));
+}
+template <> __device__ __forceinline__ __nv_bfloat16 from_float<__nv_bfloat16>(float val) {
+    float max_v = TypeTraits<__nv_bfloat16>::clamp_max();
+    return __float2bfloat16(fmaxf(-max_v, fminf(max_v, val)));
+}
+template <> __device__ __forceinline__ signed char from_float<signed char>(float val) {
+    float max_v = TypeTraits<signed char>::clamp_max();
+    return static_cast<signed char>(fmaxf(-max_v, fminf(max_v, val)));
+}
+template <> __device__ __forceinline__ __nv_fp8_e4m3 from_float<__nv_fp8_e4m3>(float val) {
+    float max_v = TypeTraits<__nv_fp8_e4m3>::clamp_max();
+    return __nv_fp8_e4m3(fmaxf(-max_v, fminf(max_v, val)));
+}
+template <> __device__ __forceinline__ __nv_fp8_e5m2 from_float<__nv_fp8_e5m2>(float val) {
+    float max_v = TypeTraits<__nv_fp8_e5m2>::clamp_max();
+    return __nv_fp8_e5m2(fmaxf(-max_v, fminf(max_v, val)));
+}
 
 // =========================================================================
 // QPOLA コアロジック (__device__ 関数にしてカーネルからの呼出し許可)
@@ -90,6 +126,9 @@ __device__ __forceinline__ void qpola_kernel_impl(
     // 各型(T)のポインタから正しいビット幅で読出し即座に内部計算用の float へ変換
     float g_val = is_active ? to_float(g[idx]) : 0.0f;
     float p_val = is_active ? to_float(p[idx]) : 0.0f;
+    // PyTorch側からの NaN/Inf 侵入をカット
+    if (isnan(g_val) || isinf(g_val)) g_val = 0.0f;
+    if (isnan(p_val) || isinf(p_val)) p_val = 0.0f;
 
     // 2. QJL代替(符号情報)
     float g_sign = (g_val > 0.0f) ? 1.0f : ((g_val < 0.0f) ? -1.0f : 0.0f);
@@ -160,7 +199,7 @@ __device__ __forceinline__ void qpola_kernel_impl(
     adaptation_factor = fminf(fmaxf(adaptation_factor, 0.01f), 1.0f);
 
     // 7. 極座標型無次元更新(型に応じて係数を自動切り替え)
-    float min_ratio = get_min_p_factor<T>(); 
+    float min_ratio = TypeTraits<T>::min_p_factor();
     // float local_p_factor = fmaxf(log1pf((float)fabsf(p_val)), log1pf((float)warp_p_scale) * min_ratio);
     // データ型(T)が許容できる｢落差の最大限｣(1 / min_ratio)でブレーキ閾値を自動逆算
     // 【無次元化】 周囲のスケール(warp_p_scale)を基準にブレーキの強さを自律決定する
@@ -174,6 +213,10 @@ __device__ __forceinline__ void qpola_kernel_impl(
 
     // 8. パラメータの更新と再量子化書戻し
     float next_p = p_val - (base_lr * g_sign * update_scale);
+    // 表現限界以下に縮小した重みはパタパタ振動させずに完全な 0 へ安全着地させる
+    if (fabsf(next_p) < TypeTraits<T>::zero_threshold()) next_p = 0.0f;
+    // 書き戻し時の NaN 伝播ガード
+    if (isnan(next_p) || isinf(next_p)) next_p = p_val;
     p[idx] = from_float<T>(next_p);
 }
 
@@ -182,28 +225,20 @@ __device__ __forceinline__ void qpola_kernel_impl(
 // =========================================================================
 extern "C" {
 
-__global__ void qpola_kernel_fp32(float* p, const float* g, float base_lr, float eps, int n) {
-    qpola_kernel_impl<float>(p, g, base_lr, eps, n);
+// マクロでエントリーポイントの定義をパターン化
+#define DEFINE_QPOLA_ENTRY(SUFFIX, TYPE) \
+__global__ void qpola_kernel_##SUFFIX(TYPE* p, const TYPE* g, float base_lr, float eps, int n) { \
+    qpola_kernel_impl<TYPE>(p, g, base_lr, eps, n); \
 }
 
-__global__ void qpola_kernel_fp16(__half* p, const __half* g, float base_lr, float eps, int n) {
-    qpola_kernel_impl<__half>(p, g, base_lr, eps, n);
-}
+// 1行ずつスッキリ宣言！
+DEFINE_QPOLA_ENTRY(fp32,     float)
+DEFINE_QPOLA_ENTRY(fp16,     __half)
+DEFINE_QPOLA_ENTRY(bf16,     __nv_bfloat16)
+DEFINE_QPOLA_ENTRY(int8,     signed char)
+DEFINE_QPOLA_ENTRY(fp8_e4m3, __nv_fp8_e4m3)
+DEFINE_QPOLA_ENTRY(fp8_e5m2, __nv_fp8_e5m2)
 
-__global__ void qpola_kernel_bf16(__nv_bfloat16* p, const __nv_bfloat16* g, float base_lr, float eps, int n) {
-    qpola_kernel_impl<__nv_bfloat16>(p, g, base_lr, eps, n);
-}
-
-__global__ void qpola_kernel_int8(signed char* p, const signed char* g, float base_lr, float eps, int n) {
-    qpola_kernel_impl<signed char>(p, g, base_lr, eps, n);
-}
-
-__global__ void qpola_kernel_fp8_e4m3(__nv_fp8_e4m3* p, const __nv_fp8_e4m3* g, float base_lr, float eps, int n) {
-    qpola_kernel_impl<__nv_fp8_e4m3>(p, g, base_lr, eps, n);
-}
-
-__global__ void qpola_kernel_fp8_e5m2(__nv_fp8_e5m2* p, const __nv_fp8_e5m2* g, float base_lr, float eps, int n) {
-    qpola_kernel_impl<__nv_fp8_e5m2>(p, g, base_lr, eps, n);
-}
+#undef DEFINE_QPOLA_ENTRY
 
 } // extern "C"
