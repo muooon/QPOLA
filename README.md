@@ -55,6 +55,7 @@ Please place qpola.py and qpola_kernel.ptx in the same folder.
 QPOLAは従来のオプティマイザよりも大きな学習率(LR)を設定します(最大値として機能します)  
 
 *   下限値やLR導出等を正確かつ精緻に管理したので LR：1.0 以下で安定的に進行します(LoRA)  
+*   低精度･量子化モデル(学習時モデル量子化等)は安定化のためLRを下げてください(fp8：1e-3等)  
 *   事前学習やフルファインチューニングにおいては相応しいスケールに落としてください LR：1e-3 以下等(Pre & FT)  
 
 It prioritizes generality, autonomy, and adaptability in pursuit of new paths for optimization, efficiency, and simplicity.  
