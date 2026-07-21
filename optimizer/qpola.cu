@@ -79,30 +79,48 @@ template <> struct TypeTraits<__nv_fp8_e5m2> {
 };
 
 // 3. メモリへの書き戻し時：fp32からターゲット型へキャスト (TypeTraits連動)
-template <typename T> __device__ __forceinline__ T from_float(float val);
 
-template <> __device__ __forceinline__ float from_float<float>(float val) {
+// 超軽量・GPU命令数最小の乱数 (0.0f ～ 1.0f 未満)
+__device__ __forceinline__ float fast_rand_01() {
+    // clock() を使わず、スレッドIDのビットシャッフルだけで1サイクル生成
+    uint32_t x = (blockIdx.x * blockDim.x + threadIdx.x) * 1664525u + 1013904223u;
+    return (x & 0x00FFFFFF) * (1.0f / 16777216.0f);
+}
+
+// (FP32, FP16, BF16 は従来のまま変更なし)
+
+template <typename T> __device__ __forceinline__ T from_float(float val, float conflict = 0.0f);
+
+template <> __device__ __forceinline__ float from_float<float>(float val, float conflict) {
     return val;
 }
-template <> __device__ __forceinline__ __half from_float<__half>(float val) {
+template <> __device__ __forceinline__ __half from_float<__half>(float val, float conflict) {
     float max_v = TypeTraits<__half>::clamp_max();
     return __float2half(fmaxf(-max_v, fminf(max_v, val)));
 }
-template <> __device__ __forceinline__ __nv_bfloat16 from_float<__nv_bfloat16>(float val) {
+template <> __device__ __forceinline__ __nv_bfloat16 from_float<__nv_bfloat16>(float val, float conflict) {
     float max_v = TypeTraits<__nv_bfloat16>::clamp_max();
     return __float2bfloat16(fmaxf(-max_v, fminf(max_v, val)));
 }
-template <> __device__ __forceinline__ signed char from_float<signed char>(float val) {
+template <> __device__ __forceinline__ signed char from_float<signed char>(float val, float conflict) {
     float max_v = TypeTraits<signed char>::clamp_max();
-    return static_cast<signed char>(fmaxf(-max_v, fminf(max_v, val)));
+    float clamped = fmaxf(-max_v, fminf(max_v, val));
+    // 0.0 ~ 0.999f 乱数を足しキャストし｢確率的丸め｣を行う(floorf不要)
+    // conflict (0.0 ~ 2.0) に応じて乱数の乗り具合を動的に変化させる
+    // 例：アライメントが揃っている(conflict ~ 0)ときは素直に丸め乱れている時だけ揺らす
+    float rand_val = fast_rand_01() * (1.0f + 0.5f * conflict);
+    return static_cast<signed char>(clamped + rand_val);
 }
-template <> __device__ __forceinline__ __nv_fp8_e4m3 from_float<__nv_fp8_e4m3>(float val) {
+template <> __device__ __forceinline__ __nv_fp8_e4m3 from_float<__nv_fp8_e4m3>(float val, float conflict) {
     float max_v = TypeTraits<__nv_fp8_e4m3>::clamp_max();
-    return __nv_fp8_e4m3(fmaxf(-max_v, fminf(max_v, val)));
+    // 乱数を加え直接キャスト (命令数を極小化)
+    float jittered = val + (fast_rand_01() - 0.5f) * 0.0625f * (1.0f + conflict);
+    return __nv_fp8_e4m3(fmaxf(-max_v, fminf(max_v, jittered)));
 }
-template <> __device__ __forceinline__ __nv_fp8_e5m2 from_float<__nv_fp8_e5m2>(float val) {
+template <> __device__ __forceinline__ __nv_fp8_e5m2 from_float<__nv_fp8_e5m2>(float val, float conflict) {
     float max_v = TypeTraits<__nv_fp8_e5m2>::clamp_max();
-    return __nv_fp8_e5m2(fmaxf(-max_v, fminf(max_v, val)));
+    float jittered = val + (fast_rand_01() - 0.5f) * 0.25f * (1.0f + conflict);
+    return __nv_fp8_e5m2(fmaxf(-max_v, fminf(max_v, jittered)));
 }
 
 // =========================================================================
@@ -228,7 +246,7 @@ __device__ __forceinline__ void qpola_kernel_impl(
     if (fabsf(next_p) < TypeTraits<T>::zero_threshold()) next_p = 0.0f;
     // 書き戻し時の NaN 伝播ガード
     if (isnan(next_p) || isinf(next_p)) next_p = p_val;
-    p[idx] = from_float<T>(next_p);
+    p[idx] = from_float<T>(next_p, conflict);
 }
 
 // =========================================================================
