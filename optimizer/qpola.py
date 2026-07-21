@@ -5,11 +5,13 @@ import torch
 from torch.optim import Optimizer
 
 """
-QPOLA v1.0.2 260721 (Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応
+QPOLA v1.0.3 260722 (Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応
 QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)
 量子化に強い、履歴ゼロ、空間協調(極座標･QJL)による自己適応型SGD
 QPOLAは従来のオプティマイザよりも大きな学習率(LR)を設定します(最大値として機能します)
-(概ね AdamW(×100倍)相当です、AdamW：1e-4 ≈ QPOLA：1e-2 くらい)
+下限値やLR導出等を正確かつ精緻に管理したので LR：1.0 以下で安定的に進行します(LoRA)
+事前学習やフルファインチューンニングにおいては相応しいスケールに落としてください LR：1e-3 以下等(Pre & FT)
+(この仕組みは瞬時的な 勾配 の 分解と再構成 を行います、複次的にVRAM負荷を劇的に削減しました)
 usage ／ 使い方
 --optimizer_type=optimizer.qpola.QPOLA
 Please place qpola.py and qpola_kernel.ptx in the same folder.
@@ -190,9 +192,10 @@ class QPOLA(Optimizer):
                 if not g.is_contiguous():
                     del g_cuda
 
-        # 【強制】 プールされた未使用VRAMキャッシュ完全解放(クリーンアップ) 必要あれば "# 解除"
-        #if torch.cuda.is_available():
-        #    torch.cuda.empty_cache()
+        # 【強制】 プールされた未使用VRAMキャッシュ完全解放(クリーンアップ)
+        # 必要に応じ "# コメント化" してください、VRAMに余裕のある場合に高速化します
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         return loss
 

@@ -1,5 +1,5 @@
 // =========================================================================
-// QPOLA カーネルコア v1.0.2 260721 by muooon https://github.com/muooon/QPOLA
+// QPOLA カーネルコア v1.0.3 260722 by muooon https://github.com/muooon/QPOLA
 // =========================================================================
 
 #include <cuda_runtime.h>
@@ -31,45 +31,51 @@ __device__ __forceinline__ float to_float(__nv_fp8_e5m2 val)   { return static_c
 template <typename T> struct TypeTraits;
 
 template <> struct TypeTraits<float> {
-    // fp32 基準･すべてにおいて最も精密／最小係数：min_p_facter(精密)／ゼロ閾値：1e-16(安定)
+    // fp32 基準･最も精密／最小係数：min_p_facter(精密)／ゼロ閾値：1e-16(安定)／億分率
     static __device__ __forceinline__ float clamp_max()      { return 3.4e38f; }
     static __device__ __forceinline__ float min_p_factor()   { return 0.01f; }
     static __device__ __forceinline__ float zero_threshold() { return 1e-16f; }
+    static __device__ __forceinline__ float min_adaptation()  { return 1e-8f; }
 };
 
 template <> struct TypeTraits<__half> {
-    // fp16 有効値 [-65504.0, 65504.0]／最小係数：min_p_facter(精密)／ゼロ閾値：1e-6
+    // fp16 有効値 [-65504.0, 65504.0]／最小係数：min_p_facter(精密)／ゼロ閾値：1e-6／10⁻⁵
     static __device__ __forceinline__ float clamp_max()      { return 65504.0f; }
     static __device__ __forceinline__ float min_p_factor()   { return 0.01f; }
     static __device__ __forceinline__ float zero_threshold() { return 1e-6f; }
+    static __device__ __forceinline__ float min_adaptation()  { return 1e-5f; }
 };
 
 template <> struct TypeTraits<__nv_bfloat16> {
-    // bf16 有効値 [-65504.0, 65504.0]／最小係数：min_p_facter(少し粗い)／ゼロ閾値：1e-6
+    // bf16 有効値 [-65504.0, 65504.0]／最小係数：min_p_facter(少し粗い)／ゼロ閾値：1e-6／10⁻⁶
     static __device__ __forceinline__ float clamp_max()      { return 65504.0f; }
     static __device__ __forceinline__ float min_p_factor()   { return 0.05f; }
     static __device__ __forceinline__ float zero_threshold() { return 1e-6f; }
+    static __device__ __forceinline__ float min_adaptation()  { return 1e-6f; }
 };
 
 template <> struct TypeTraits<signed char> {
-    // int8 有効値 [-128, 127]オーバーフロー防止／最小係数：min_p_facter(最も粗い)／ゼロ閾値：0.0
+    // int8 有効値 [127f] オーバーフロー防止／最小係数：min_p_facter(最も粗い)／ゼロ閾値：0.0／百分率
     static __device__ __forceinline__ float clamp_max()      { return 127.0f; }
     static __device__ __forceinline__ float min_p_factor()   { return 0.15f; }
     static __device__ __forceinline__ float zero_threshold() { return 0.0f; }
+    static __device__ __forceinline__ float min_adaptation()  { return 0.001f; }
 };
 
 template <> struct TypeTraits<__nv_fp8_e4m3> {
-    // fp8 e4m3 有効値 448.0f (厳重ガード)／最小係数：min_p_facter(粗い)／ゼロ閾値：2.0e-3
+    // fp8 e4m3 有効値 448.0f 厳重ガード／最小係数：min_p_facter(粗い)／ゼロ閾値：2.0e-3／万分率
     static __device__ __forceinline__ float clamp_max()      { return 448.0f; }
     static __device__ __forceinline__ float min_p_factor()   { return 0.10f; }
     static __device__ __forceinline__ float zero_threshold() { return 2.0e-3f; }
+    static __device__ __forceinline__ float min_adaptation()  { return 1e-4f; }
 };
 
 template <> struct TypeTraits<__nv_fp8_e5m2> {
-    // fp8 e5m2 有効値 57344.0f (厳重ガード)／最小係数：min_p_facter(粗い)／ゼロ閾値：2.0e-5
+    // fp8 e5m2 有効値 57344.0f 厳重ガード／最小係数：min_p_facter(粗い)／ゼロ閾値：2.0e-5／10⁻⁵
     static __device__ __forceinline__ float clamp_max()      { return 57344.0f; }
     static __device__ __forceinline__ float min_p_factor()   { return 0.10f; }
     static __device__ __forceinline__ float zero_threshold() { return 2.0e-5f; }
+    static __device__ __forceinline__ float min_adaptation()  { return 1e-5f; }
 };
 
 // 3. メモリへの書き戻し時：fp32からターゲット型へキャスト (TypeTraits連動)
@@ -192,11 +198,16 @@ __device__ __forceinline__ void qpola_kernel_impl(
     float diff_macro = 1.0f - macro_align;
     float conflict = (diff_micro + diff_macro) * 0.5f; // 0.0(完全一致) ～ 2.0(完全反転)
 
-    // 不一致度に応じて滑らかに減衰(係数の 0.495f は conflict=2.0 のときに最低値 0.01 になる調整値)
-    float adaptation_factor = 1.0f - conflict * 0.495f;
+    // 型に応じた下限値を取得(例：fp8なら 0.0001f、bf16/fp32なら 1e-6f や 1e-8f)
+    // conflict = 2.0 の時にちょうど min_factor になる傾き(K)を自動計算
+    float min_factor = TypeTraits<T>::min_adaptation();
+    float decay_rate = (1.0f - min_factor) * 0.5f;
 
-    // 最低値を 0.01(1%)、最高値を 1.0(100%)に安全クリップ(分岐なしの組み込み関数)
-    adaptation_factor = fminf(fmaxf(adaptation_factor, 0.01f), 1.0f);
+    // 不一致度に応じて滑らかに減衰(係数 decay_rate は conflict=2.0 のとき型に応じた最低値になる)
+    float adaptation_factor = 1.0f - conflict * decay_rate;
+
+    // 最低値を min_factor、最高値を 1.0 に安全クリップ(分岐なしの組み込み関数)
+    adaptation_factor = fminf(fmaxf(adaptation_factor, min_factor), 1.0f);
 
     // 7. 極座標型無次元更新(型に応じて係数を自動切り替え)
     float min_ratio = TypeTraits<T>::min_p_factor();
