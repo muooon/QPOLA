@@ -10,6 +10,8 @@
 なぜスケジューラを捨てるのか？  Why are we abandoning the scheduler ?  
 なぜグロッキングを捨てられるのか？  Why can we abandon Glocking ?  
 
+<img width="800" alt="qpola001" src="https://github.com/user-attachments/assets/1eb7e8b5-1542-439c-bbe3-19b5c392aac0" />
+
 なぜ？ 履歴(1st/2nd Moment)、スケジューラ、を捨てることで、グロッキングを回避できるのか？  
 
 まずグロッキング(遅延汎化)を見つめてみましょう、  
@@ -38,6 +40,15 @@ QPOLA は、時間軸の履歴(過去の勾配)の代わりに、空間の協調
 (この仕組みは瞬時的な 勾配 の 分解と再構成 を行います、複次的にVRAM負荷を劇的に削減しました)  
 
 ---
+
+```
+            Q P O L A R I S
+    =================================
+        Quantization n Polar-Aligned 
+            Resetting Instant SGD
+    =================================
+    "No History needed. Guided by the Field."
+```
 
 ### License  
 Licensed under the **Apache License 2.0**. Feel free to use, modify, and distribute.  
