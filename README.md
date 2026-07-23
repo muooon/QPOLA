@@ -3,7 +3,7 @@
 ### QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)  
 #### 量子化に強い、履歴ゼロ、空間協調(極座標･QJL)による自己適応型SGD  
 
-#### QPOLA (v1.0.3 / Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応  
+#### QPOLA (v1.0.4 / Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応  
 ちょっと特殊な optimizer です、実験的です、でも実用的です、  
 
 なぜ履歴(慣性)を捨てたのか？  Why did we abandon the history (inertia) ?  
@@ -28,7 +28,7 @@
 QPOLA は、時間軸の履歴(過去の勾配)の代わりに、空間の協調を使います、  
 パラメータ空間において、GPUのハードウェア階層である｢ミクロ｣(32/Warp)と｢マクロ｣(256/Block)の差分をリアルタイムに比較するのです、  
 このマクロとミクロの比較だけで｢バラバラな方向｣を向いた｢ノイズ｣は互いに打ち消し合い、｢同じ方向｣に一貫して流れる｢本質｣(差分)だけ自動的に浮かび上がります、  
-(つまり １次２次moment の代替として機能します、ノイズなしで正確な本質だけ、ただ比較するだけで…)  
+(つまり １次２次moment の代替として機能します、ノイズなしで正確な本質だけ、ただ比較するだけ…)  
 これは、大バッチ学習やVAEの潜在空間が、ノイズを相殺し本質をあぶり出すように QPOLA は｢空間の広がり｣から本質の方向を見つけ信じ進みはじめます、  
 
 履歴という本質とノイズを含む濁流を捨てた結果：  
@@ -65,9 +65,8 @@ Please place qpola.py and qpola_kernel.ptx in the same folder.
 ### Quick Start & Recommended Learning Rates (LR)  
 QPOLAは従来のオプティマイザよりも大きな学習率(LR)を設定します(最大値として機能します)  
 
-*   下限値やLR導出等を正確かつ精緻に管理したので LR：1.0 以下で安定的に進行します(LoRA)  
-*   低精度･量子化モデルでの学習は安定化のためLRを下げてください(fp8：0.1倍、int8：0.01倍)等々  
-*   事前学習やフルファインチューニングにおいては相応しいスケールに落としてください LR：1e-3 以下等(Pre & FT)  
+*   低精度･量子化モデルでの学習はLRを下げてください、通常は LR：1e-3 あたりで安定的に進行します(LoRA)  
+*   事前学習やフルファインチューンニングにおいては相応しいスケールに落としてください LR：1e-4 程度等(Pre & FT)  
 
 It prioritizes generality, autonomy, and adaptability in pursuit of new paths for optimization, efficiency, and simplicity.  
 In its development, we deeply appreciate the insights of those who came before us—and continue to explore new possibilities beyond them.  

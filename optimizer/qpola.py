@@ -5,13 +5,12 @@ import torch
 from torch.optim import Optimizer
 
 """
-QPOLA v1.0.3 260722 (Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応
+QPOLA v1.0.4 260723 (Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応
 QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)
 量子化に強い、履歴ゼロ、空間協調(極座標･QJL)による自己適応型SGD
 QPOLAは従来のオプティマイザよりも大きな学習率(LR)を設定します(最大値として機能します)
-下限値やLR導出等を正確かつ精緻に管理したので LR：1.0 以下で安定的に進行します(LoRA)
-低精度･量子化モデルでの学習は安定化のためLRを下げてください(fp8：0.1倍、int8：0.01倍)等々
-事前学習やフルファインチューンニングにおいては相応しいスケールに落としてください LR：1e-3 以下等(Pre & FT)
+低精度･量子化モデルでの学習はLRを下げてください、通常は LR：1e-3 あたりで安定的に進行します(LoRA)
+事前学習やフルファインチューンニングにおいては相応しいスケールに落としてください LR：1e-4 程度等(Pre & FT)
 (この仕組みは瞬時的な 勾配の分解と再構成 を行います、複次的に VRAM負荷を削減 しました)
 usage ／ 使い方
 --optimizer_type=optimizer.qpola.QPOLA
@@ -47,30 +46,28 @@ cuda_driver.cuLaunchKernel.argtypes = [
 with open(ptx_path, "rb") as f:
     ptx_bytes = f.read()
 
+# デバイスごとの Loaded Module と Function のキャッシュ
+CUDA_MODULES = {}
 CUDA_KERNELS = {}
 
 def get_cuda_kernel(device_index: int, kernel_name: bytes):
-    global CUDA_KERNELS
+    global CUDA_MODULES, CUDA_KERNELS
     cache_key = (device_index, kernel_name)
     if cache_key in CUDA_KERNELS:
         return CUDA_KERNELS[cache_key]
 
     torch.cuda.set_device(device_index)
-    
-    # Driver API層のコンテキスト不整合を防ぐため
-    # PyTorchの内部関数から現在のコンテキストを取得して設定 (マルチGPU環境での安全対策)
-    try:
-        ctx = torch.cuda.get_device_properties(device_index)
-        # 簡易的に、PyTorch Runtime が生成したコンテキストを Driver API 側でカレントにする処理
-        # 通常は PyTorch が裏で管理しますが、明示的な同期を挟むことで安全性を確保します
-    except:
-        pass
 
-    module = ctypes.c_void_p()
-    res = cuda_driver.cuModuleLoadData(ctypes.byref(module), ptx_bytes)
-    if res != 0:
-        raise RuntimeError(f"GPU:{device_index} でのモジュールロード失敗 (コード: {res})")
-    
+    ## デバイスごとに PTX モジュールを 1度だけロード
+    if device_index not in CUDA_MODULES:
+        module = ctypes.c_void_p()
+        res = cuda_driver.cuModuleLoadData(ctypes.byref(module), ptx_bytes)
+        if res != 0:
+            raise RuntimeError(f"GPU:{device_index} でのモジュールロード失敗 (コード: {res})")
+        CUDA_MODULES[device_index] = module
+    else:
+        module = CUDA_MODULES[device_index]
+
     kernel = ctypes.c_void_p()
     res = cuda_driver.cuModuleGetFunction(ctypes.byref(kernel), module, kernel_name)
     if res != 0:
@@ -81,11 +78,12 @@ def get_cuda_kernel(device_index: int, kernel_name: bytes):
 
 
 class QPOLA(Optimizer):
-    def __init__(self, params, lr=1e-2, eps=1e-8):
+    def __init__(self, params, lr=1e-2, eps=1e-8, low_vram=True):
         if lr < 0.0:
             raise ValueError(f"Invalid learning rate: {lr}")
         defaults = dict(lr=lr, eps=eps)
         super(QPOLA, self).__init__(params, defaults)
+        self.low_vram = low_vram
 
     @torch.no_grad()
     def step(self, closure=None):
@@ -144,7 +142,7 @@ class QPOLA(Optimizer):
                 device_idx = target_device.index if target_device.index is not None else 0
                 kernel = get_cuda_kernel(device_idx, k_name)
 
-                # 【修正】 cuLaunchKernel 用の引数配列の構築ロジック
+                # cuLaunchKernel 用の引数配列の構築ロジック
                 # 各引数のアドレスではなく、値そのものを ctypes オブジェクトとして生成
                 p_ptr = ctypes.c_void_p(p_cuda.data_ptr())
                 g_ptr = ctypes.c_void_p(g_cuda.data_ptr())
@@ -178,7 +176,7 @@ class QPOLA(Optimizer):
                 if res != 0:
                     raise RuntimeError(f"GPU:{device_idx} 内で {k_name.decode()} の実行に失敗 (コード: {res})")
 
-                # 【修正】 GPUかつ非連続だった場合のインプレース書き戻し
+                # GPUかつ非連続だった場合のインプレース書き戻し
                 if p_was_not_contiguous and not is_cpu_tensor:
                     p.copy_(p_cuda)
 
@@ -193,9 +191,10 @@ class QPOLA(Optimizer):
                 if not g.is_contiguous():
                     del g_cuda
 
-        # 【強制】 プールされた未使用VRAMキャッシュ完全解放(クリーンアップ)
-        # 必要に応じ "# コメント化" してください、VRAMに余裕のある場合に高速化します
-        if torch.cuda.is_available():
+        # 【選択式】 プールされた未使用VRAMキャッシュの完全解放(クリーンアップ) / 中級者以上向け
+        # 毎ステップの解放は速度低下しますが 通常：True です(多くの方に学習可能状態を届けるため)
+        # VRAMに余裕がある方は初期化時に low_vram=False を設定してください (Falseで高速化)
+        if self.low_vram and torch.cuda.is_available():
             torch.cuda.empty_cache()
 
         return loss
