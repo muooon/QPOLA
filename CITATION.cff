@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software or architecture design, please cite it as below."
+authors:
+  - family-names: "muooon"
+title: "QPOLA Optimizers : No History needed. Guided by the Field."
+version: 1.0.4
+date-released: 2026-07-28
+url: "https://huggingface.co/muooon/QPOLA"
+repository-code: "https://github.com/muooon/QPOLA"
+keywords:
+  - optimizer
+  - adaptive-algorithms
+  - cuda-kernel
+  - deep-learning
+  - memory-efficient
+  - meta-learning
+  - polar-coordinates
+  - stability-analysis
+  - quantization
+license: Apache-2.0
+abstract: >-
+ "QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)"
+ Quantization‑resilient, history‑free, spatially coordinated (polar coordinates / QJL) self‑adaptive SGD  
+ This method removes the dependency on first‑ and second‑order moments that existing optimizers store in global memory, and instead substitutes them with fast parallel aggregation that fully leverages CUDA’s hardware architecture. It further enables adaptive damping that reflects feedback derived from global loss behavior.
