@@ -5,16 +5,19 @@ import torch
 from torch.optim import Optimizer
 
 """
-QPOLA v1.0.4 260723 (Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応
+QPOLA v1.0.4 260731 (Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応
 QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)
 量子化に強い、履歴ゼロ、空間協調(極座標･QJL)による自己適応型SGD
 QPOLAは従来のオプティマイザよりも大きな学習率(LR)を設定します(最大値として機能します)
 低精度･量子化モデルでの学習はLRを下げてください、通常は LR：1e-3 あたりで安定的に進行します(LoRA)
 事前学習やフルファインチューンニングにおいては相応しいスケールに落としてください LR：1e-4 程度等(Pre & FT)
 (この仕組みは瞬時的な 勾配の分解と再構成 を行います、複次的に VRAM負荷を削減 しました)
+※ fp/int4 の学習については STE 環境下等で通常動作可能／CUDA特性は生の4bit未対応なだけです 
 usage ／ 使い方
 --optimizer_type=optimizer.qpola.QPOLA
 Please place qpola.py and qpola_kernel.ptx in the same folder.
+update:260731
+既存オプティマイザの init に合わせることで未指定項目によるエラーを防止(未使用項目はダミーになります)
 """
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -78,12 +81,16 @@ def get_cuda_kernel(device_index: int, kernel_name: bytes):
 
 
 class QPOLA(Optimizer):
-    def __init__(self, params, lr=1e-2, eps=1e-8, low_vram=True):
-        if lr < 0.0:
-            raise ValueError(f"Invalid learning rate: {lr}")
+    def __init__(self, params, 
+                 lr=1e-3, 
+                 eps=1e-8, 
+                 low_vram=True, 
+                 betas=(0.9, 0.995), 
+                 weight_decay=0.01):
         defaults = dict(lr=lr, eps=eps)
         super(QPOLA, self).__init__(params, defaults)
         self.low_vram = low_vram
+    # betas, weight_decay 等は未使用、学習側の記述書き換え等を受け流しエラー防止するダミーです
 
     @torch.no_grad()
     def step(self, closure=None):
