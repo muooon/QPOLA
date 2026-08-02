@@ -1,10 +1,10 @@
 # QPOLA Optimizer  
 
-### QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)  
-#### 量子化に強い、履歴ゼロ、空間協調(極座標･QJL)による自己適応型SGD  
+#### QPOLARIS (Quantization n Polar-Aligned Resetting Instant Zero-Master Weight SGD)  
+##### 量子化に強い、履歴ゼロ、空間協調(極座標･QJL)、Zero-Master Weight による自己適応型SGD  
 
-#### QPOLA (v1.0.4 / Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応  
-##### CUDA は 4bit 未対応ですが QPOLA は STE、AMP、で低精度に対応可です  
+##### QPOLA (v1.0.4 / Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応  
+###### CUDA は 4bit 未対応ですが QPOLA は STE･AMP で低精度に対応可です  
 
 ちょっと特殊な optimizer です、実験的です、でも実用的です、  
 
@@ -49,7 +49,8 @@ QPOLA は、時間軸の履歴(過去の勾配)の代わりに、空間の協調
             Q P O L A R I S
     =================================
         Quantization n Polar-Aligned 
-            Resetting Instant SGD
+            Resetting Instant 
+         Zero-Master Weight SGD
     =================================
     "No History needed. Guided by the Field."
 ```
@@ -64,8 +65,8 @@ Official Code:
 https://github.com/muooon/QPOLA  
 
 paper:  
-[English] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(ENG)260728.txt  
-[日本語] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(JPN)260728.txt  
+[English] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(ENG)260803.txt  
+[日本語] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(JPN)260803.txt  
 
 ---
 

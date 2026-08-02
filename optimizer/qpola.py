@@ -6,8 +6,8 @@ from torch.optim import Optimizer
 
 """
 QPOLA v1.0.4 260731 (Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応
-QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)
-量子化に強い、履歴ゼロ、空間協調(極座標･QJL)による自己適応型SGD
+QPOLARIS (Quantization n Polar-Aligned Resetting Instant Zero-Master Weight SGD)
+量子化に強い、履歴ゼロ、空間協調(極座標･QJL)、Zero-Master Weight による自己適応型SGD
 QPOLAは従来のオプティマイザよりも大きな学習率(LR)を設定します(最大値として機能します)
 低精度･量子化モデルでの学習はLRを下げてください、通常は LR：1e-3 あたりで安定的に進行します(LoRA)
 事前学習やフルファインチューンニングにおいては相応しいスケールに落としてください LR：1e-4 程度等(Pre & FT)

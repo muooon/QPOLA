@@ -1,7 +1,7 @@
 # QPOLA Optimizer  
 
-### QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)  
-#### Quantization‑resilient, history‑free, spatially coordinated (polar coordinates / QJL) self‑adaptive SGD  
+### QPOLARIS (Quantization n Polar-Aligned Resetting Instant Zero-Master Weight SGD)  
+#### Quantization‑resilient, history‑free, spatially coordinated (polar coordinates / QJL) self‑adaptive Zero-Master Weight SGD  
 
 #### QPOLA (v1.0.4 / Moment-Free) fp8/int8 supported  ※ 4‑bit unsupported due to CUDA characteristics  
 ##### CUDA itself does not support 4‑bit, but QPOLA can still operate in low precision via STE and AMP  
@@ -49,7 +49,8 @@ Without “inertial momentum” from historical accumulation, parameters no long
             Q P O L A R I S
     =================================
         Quantization n Polar-Aligned 
-            Resetting Instant SGD
+            Resetting Instant 
+         Zero-Master Weight SGD
     =================================
     "No History needed. Guided by the Field."
 ```
@@ -64,8 +65,8 @@ Official Code:
 https://github.com/muooon/QPOLA  
 
 paper:  
-[English] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(ENG)260728.txt  
-[日本語] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(JPN)260728.txt  
+[English] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(ENG)260803.txt  
+[日本語] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(JPN)260803.txt  
 
 ---
 
