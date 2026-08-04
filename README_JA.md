@@ -8,9 +8,9 @@
 
 ちょっと特殊な optimizer です、実験的です、でも実用的です、  
 
-なぜ履歴(慣性)を捨てたのか？  Why did we abandon the history (inertia) ?  
-なぜスケジューラを捨てるのか？  Why are we abandoning the scheduler ?  
-なぜグロッキングを捨てられるのか？  Why can we abandon Glocking ?  
+なぜ履歴(慣性)を捨てたのか？  
+なぜスケジューラを捨てるのか？  
+なぜグロッキングを捨てられるのか？  
 
 readme：[English](README.md) | [日本語](README_JA.md)  
 
@@ -48,11 +48,11 @@ QPOLA は、時間軸の履歴(過去の勾配)の代わりに、空間の協調
 ```
             Q P O L A R I S
     =================================
-        Quantization n Polar-Aligned 
-            Resetting Instant 
+      Quantization n Polar-Aligned 
+           Resetting Instant 
          Zero-Master Weight SGD
     =================================
-    "No History needed. Guided by the Field."
+"No History needed. Guided by the Field."
 ```
 
 ### About citations  

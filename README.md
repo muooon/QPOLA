@@ -48,11 +48,11 @@ Without “inertial momentum” from historical accumulation, parameters no long
 ```
             Q P O L A R I S
     =================================
-        Quantization n Polar-Aligned 
-            Resetting Instant 
+      Quantization n Polar-Aligned 
+           Resetting Instant 
          Zero-Master Weight SGD
     =================================
-    "No History needed. Guided by the Field."
+"No History needed. Guided by the Field."
 ```
 
 ### About citations  
