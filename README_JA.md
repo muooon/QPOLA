@@ -14,6 +14,9 @@
 
 readme：[English](README.md) | [日本語](README_JA.md)  
 
+
+コードの移植についてはこちら：[English](universal/logical_design_ENG.txt) | [日本語](universal/logical_design_JPN.txt)  
+
 <img width="800" alt="qpola001" src="https://github.com/user-attachments/assets/1eb7e8b5-1542-439c-bbe3-19b5c392aac0" />
 
 なぜ？ 履歴(1st/2nd Moment)、スケジューラ、を捨てることで、グロッキングを回避できるのか？  
@@ -90,3 +93,33 @@ QPOLAは従来のオプティマイザよりも大きな学習率(LR)を設定�
 
 It prioritizes generality, autonomy, and adaptability in pursuit of new paths for optimization, efficiency, and simplicity.  
 In its development, we deeply appreciate the insights of those who came before us—and continue to explore new possibilities beyond them.  
+
+---
+
+QPOLA について、もう少し詳しく説明すると、  
+
+1. Loss(大域的判定場)という｢全履歴のアーカイブ｣  
+
+機械学習の学習プロセスにおいて、現在のステップにおける Loss(損失) は、単なるスカラー値ではなく｢初期状態から現在に至る｣までの｢すべてのパラメータ軌跡と勾配の歴史｣(全履歴)を圧縮･反映した｢結果の到達点｣です。  
+
+QPOLA は、明示的なオプティマイザーステート(バッファ･メモリ)を持たず、最上位にある Loss という大域的判定場で過去の全軌跡の｢重みと歪み｣のみを常に信頼します。  
+
+つまり QPOLA は｢過去を捨てる｣のではなく｢過去の全履歴である Loss から降りてくる"勾配"を通じ、毎ステップ全履歴を瞬時に再投影(自己組織化)している｣と言えます。  
+
+2. 局所判定場と空間的コヒーレンス(位相整合)による動的適応が生む｢自発的慣性｣  
+
+QPOLA のコードにある｢ミクロ(warp/block)局所アライメント｣と｢マクロ(loss)大域｣の相互作用、空間軸のコンセンサス(合意形成)により｢自発的慣性｣を生み出します。  
+
+局所判定場(コンフリクトやアライメント)：個々のパラメータや局所的なベクトルが、周囲の勾配の向きとどう整合しているかをリアルタイムに評価し、ゆらぎ(ジッター)や適応係数(adaptation_factor)を動的に変化させます。  
+
+大域的判定場(Loss / 全体トレンド)：その局所的な挙動の総結果として Loss は変動し、次に降りてくる勾配そのものを書き換えます。  
+
+※ これは warp/block で｢ベクトルを抽出し差分を反映｣します、別ハードウェアではダイレクトにベクトルをつかう等で、この仕組みを移植可能(数学的に等価的)です。  
+
+この｢下位の局所的なゆらぎ･自己組織化｣と｢上位の大域的なLossの勾配配分｣により統御される自己完結したフィードバックループは、時間的な履歴(モメンタム)の代わりに空間的な位相の揃い具合(コヒーレンス)を利用し安定させる新しい数理構造を持ちます。  
+
+3. ｢メモリに頼らない慣性｣というパラダイムシフト  
+
+AdamWの慣性：過去の勾配を｢ただの数値の足し算の履歴｣(EMA)としてメモリに保存する、いわば機械的な外部記憶(人工的な慣性)です。  
+
+QPOLAの自発的慣性：メモリ(履歴)に頼らず、系全体のエネルギー勾配(Loss)と局所的なアライメントの衝突(Conflict)のダイナミクスを通じ、システムが動的に生み出し続ける自発的慣性です。  

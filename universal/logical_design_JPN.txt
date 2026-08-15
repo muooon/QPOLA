@@ -1,0 +1,79 @@
+QPOLA : ゼロマスターウェイトで空間的勾配整合性局所クラスタと大域的損失フィードバックによる低精度対応の最適化
+
+QPOLA ／ QPOLARIS (Quantization n Polar-Aligned Resetting Instant Zero-Master Weight SGD)
+量子化に強い、空間協調(極座標･QJL)、履歴ゼロ、ゼロマスターウェイトによる自己適応型SGD
+(https://github.com/muooon/QPOLA) (https://huggingface.co/muooon/QPOLA)
+
+
+これは 汎用型･移植 向け (論理的設計) の指針です、
+QPOLA の Warp / Block を VectorStrip / UnifiedBuffer 等に置き換えます、
+QPOLA の 32/256 で計算しているのは｢ベクトル｣です、まず方向をここで確定します、
+次にこの複数ベクトルの差を量にすることが warp/block での差を量にするのと同じ意味になります、
+つまり CANN Ascend 等に対しハードウェアのもつベクトルをそのまま活用すれば 𝑝ₙₑₓₜ は等価的になります、
+
+𝑝ₙₑₓₜ = 𝑝 − (𝑏𝑎𝑠𝑒_𝑙𝑟 × 𝑔̂ × 𝑎𝑑𝑎𝑝𝑡𝑎𝑡𝑖𝑜𝑛_𝑓𝑎𝑐𝑡𝑜𝑟)
+
+一括ロード：
+グローバルメモリ(HBM)から、重みpと勾配gの帯(Vector Strip)を、AI Core内の Unified Buffer (UB) へ一気にロード
+ベクトル比較と局所集計：
+UB上で、ベクトルの各要素が持つ｢傾き(符号や絶対値)｣の傾向を、ベクトル演算命令(ReduceやBroadcastに相当する処理)を使って、その帯全体で集計
+自己投影的なゆらぎ(ジッター)の付与：
+スレッドIDの代わりに｢ベクトル上のインデックス｣(位置座標)をベースにした乱数オフセットをベクトル演算で一括生成し、各重みの調整量に織り込み
+
+    ここまでを踏まえた以下が CANN向け の移植案になります、実機がないのでこれはイメージ(試作)です、
+    実環境に合わせて要調整です、型トレイトなどを組み込み、コアロジックの移植を精査してください、
+
+---CANN---
+Warpシャッフルから｢Vector Strip リダクション｣への昇華：
+NVIDIA版で行っていた __shfl_down_sync によるスレッド間のレジスタ覗き見を廃し、Ascendが最も得意とする｢連続したベクトル･ストリップ(BLOCK_LENGTH 単位)｣ごとの一括集計に置き換え、これにより、DaVinciアーキテクチャのVectorユニットのパイプラインを止めることなく、効率よく方向性の合意(g_sign_sum)を算出できます。
+
+自己投影型ゆらぎの座標マッピング：
+スレッドIDに依存していた乱数シードを、｢グローバルインデックス位置(offset + idx)｣をベースにしたビット演算による軽量擬似乱数に変更、これにより、配列内の｢どこに位置しているか｣という自己投影的なゆらぎのダイナミクスを、Ascendのベクトルループ上でも完全に再現しています。
+
+メモリアクセスの最適化(ダブルバッファリング対応)：
+CopyIn ――> Compute ――> CopyOut のパイプライン構造を維持しつつ、Unified Buffer(UB)上でFP32の精度を維持したまま高速にベクトル演算を回すことで、HBM(グローバルメモリ)との帯域負荷を最小限に抑えています。
+
+
+---Mali---
+Warpシャッフルから｢ワークグループ(Work-Group)＆ローカルメモリ｣への置き換え：
+NVIDIA版の __shfl_down_sync や CANN のようなハードウェア･ベクトルレジスタ間リダクションに頼らず、Mali が最も効率よく動く OpenCL / Vulkan の Work-Group(通常 64〜256 規模) と Local Memory(__local / shared) を用いたツリー型リダクションに置き換えます。これにより、ハードウェアのスレッド幅(Warp 32等の縛り)に依存せず、安全に大域的･局所的な方向性の合意(方向平均)を算出できます。
+
+軽量スレッドインデックスをベースにした擬似乱数の継続：
+Mali のコンピュートシェーダー環境では複雑な組み込み関数が使えない場合があるため、CUDA版のビットシャッフル表現をそのまま OpenCL の整数演算( get_global_id(0) を利用したハッシュ系演算、例： 1664525u などの乗算ベース)に移植します。これにより、モバイル･組み込み環境のALUパイプラインを圧迫せずに｢自己投影型ゆらぎ(Stochastic Rounding)｣を完全に再現します。
+
+レジスタ溢れを防ぐためのベクタライズ(Vector Types)の活用：
+Mali GPU(Bifrost / Valhall / Immortalis アーキテクチャ)は、float4 などのベクトル型(Vector Data Types)の演算をハードウェアレベルで効率よく処理します。要素ごとの処理を単体(scalar)で回すのではなく、可能な部分は float4 や half4 にまとめてロード･演算･ストアを行うことで、メモリバンド幅の狭いモバイル環境やエッジデバイス上でも最大のスループットを引き出します。
+
+
+---QNN / Hexagon NPU---
+対象：
+Snapdragon の Adreno GPU や Hexagon NPU
+対応方針：
+QPOLAのような｢最適化されたオプティマイザの重み更新ステップ｣をデバイス単体(オンデバイス学習やファインチューニング)で回す場合、Qualcomm AI Engine Direct (QNN) SDK や SNPE (Snapdragon Neural Processing Engine) のカスタムオペレーション(Custom Op)として組み込む必要があります。
+NPUはそもそも固定小数点や特殊な量子化フォーマット(INT4/INT8等)の高速演算に特化しているため、QPOLAの｢確率的丸め(Stochastic Rounding)｣や｢アライメント衝突度に応じたダイナミクス｣を、NPU側のベクトル演算命令やDSPコードにどうマッピングするか、あるいはCPU/GPU側で処理させるかの切り分けが指針として重要になります。
+
+
+---macOS / iOS / Metal Shading Language(MSL)---
+対象：
+Apple製SoC(M1/M2/M3/M4など) PyTorch の MPS(Metal Performance Shaders)バックエンドや、MLXなどの独自フレームワークを利用
+対応方針：
+CUDAのカスタムカーネルに相当するものは Metal Shading Language (MSL) で記述したコンピュートシェーダーになります。
+ワープ(Warp)の概念はなく、Threadgroup(通常 32 または 256 などのスレッド構成) と Threadgroup Memory(共有メモリに相当) を用いた実装に書き換える必要があります。
+低ビット量子化(FP8やint8など)のサポート状況がハード世代(Mシリーズのどこか)によって異なるため、ホスト側(Python/MPS)でのフォールバック処理の考慮が必要です。
+
+
+---ROCm---
+ROCm (AMD / HIP) 向けROCm は NVIDIA CUDA と非常に高い互換性(APIのセマンティクス)を持っているため、ソースコードレベルでの書き換えが最も少ない、
+対応方針：
+拡張子を .cu から .hip に変更し、CUDAのランタイム関数や型をHIPのものに置換します。変換ツール(hipify-perl または hipify-clang)をそのまま通すことで、コードの大部分が自動変換されます。
+ヘッダーの置き換え：
+#include <cuda_runtime.h> ――> #include <hip/hip_runtime.h> など、低ビット型のヘッダーも ROCm 側の対応ヘッダー(hip_fp16.h や hip_bfloat16.h など)に変更します。
+Warpサイズの差異(重要)： コード内のコメントにもある通り、NVIDIAは常に32ですが、AMD(CDNA/RDNAアーキテクチャ)は Warpサイズ(Wavefrontサイズ)が 32 または 64 になります(RDNAは32、CDNAは64が主流)。コード内の #define WARP_SIZE 32 を、ターゲットハードウェアに合わせて動的または静的に 64 へ切り替えられるようにする、あるいは Wavefront サイズ依存のシャッフル処理が正しく動くか確認が必要です。
+
+
+---iPEX---
+Intel の oneAPI / SYCL は、CUDAからの直接移行を支援するツール(Intel DPC++ Compatibility Tool / dpct) が用意されており、これを利用することで効率的に移植可能、
+対応方針：
+SYCL(C++ベースのプログラミングモデル)または、Intel版のPyTorchカスタムカーネル記述(C++ Extension)に落とし込みます。
+Warp(Sub-group)概念の差異：
+Intel GPUのハードウェアは Sub-group(NVIDIAのWarpに相当)のサイズが 16, 32, 64 などで変動 します(アーキテクチャによる)。そのため、固定の WARP_SIZE を前提としたシャッフル命令(__shfl_down_sync など)は、SYCLの sub_group 機能や intel::ballot / permute などのグループ演算に書き換える必要があります。

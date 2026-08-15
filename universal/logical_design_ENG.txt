@@ -1,0 +1,79 @@
+QPOLA : Zero-Master Weight Optimization of Low-Precision GPU Kernels Using Self-Organized Weight Clustering and Global Loss Feedback
+
+QPOLA ／ QPOLARIS (Quantization n Polar-Aligned Resetting Instant Zero-Master Weight SGD)
+Quantization-resilient, history-free, spatially coordinated (polar coordinates / QJL) self-adaptive Zero-Master Weight SGD
+(https://github.com/muooon/QPOLA) (https://huggingface.co/muooon/QPOLA)
+
+
+This is a guideline for general-purpose / porting (logical design),
+Replace Warps / Blocks in QPOLA with VectorStrips / UnifiedBuffers, etc.,
+What is calculated at 32/256 in QPOLA is a "vector"; the direction is determined here first,
+Next, turning the difference between these multiple vectors into a quantity has the same meaning as turning the difference within a warp/block into a quantity,
+In other words, by directly utilizing the hardware's native vectors for CANN Ascend, etc., 𝑝ₙₑₓₜ becomes equivalent,
+
+𝑝ₙₑₓₜ = 𝑝 − (𝑏𝑎𝑠𝑒_𝑙𝑟 × 𝑔̂ × 𝑎𝑑𝑎𝑝𝑡𝑎𝑡𝑖𝑜𝑛_𝑓𝑎𝑐𝑡𝑜𝑟)
+
+Batch Load:
+Load weight p and gradient g strips (Vector Strips) all at once from global memory (HBM) to the Unified Buffer (UB) inside the AI Core.
+Vector Comparison and Local Aggregation:
+On the UB, aggregate the trends of "slope (sign and absolute value)" possessed by each element of the vector across the entire strip using vector operation instructions (processing equivalent to Reduce or Broadcast).
+Injection of Self-Projected Fluctuations (Jitter):
+Batch-generate random offsets based on "indices on the vector" (positional coordinates) instead of thread IDs via vector operations, and weave them into the adjustment amount for each weight.
+
+    Based on the above, the following is a porting proposal for CANN. Since I don't have the actual hardware, this is an image (prototype).
+    Adjustments are required according to the actual environment. Please incorporate type traits and carefully review the porting of the core logic.
+
+---CANN---
+Evolution from Warp Shuffle to "Vector Strip Reduction":
+Eliminates the inter-thread register peeking via __shfl_down_sync used in the NVIDIA version, and replaces it with batch aggregation per "continuous vector strips (in units of BLOCK_LENGTH)", which Ascend excels at. This allows calculating the directional consensus (g_sign_sum) efficiently without stopping the pipeline of the DaVinci architecture's Vector unit.
+
+Coordinate Mapping of Self-Projected Fluctuations:
+Changes the random number seed, which previously depended on thread IDs, to lightweight pseudo-random numbers based on bit operations using the "global index position (offset + idx)". This perfectly reproduces the self-projected fluctuation dynamics of "where it is located" within the array, even on Ascend's vector loops.
+
+Memory Access Optimization (Double Buffering Support):
+While maintaining the pipeline structure of CopyIn ---> Compute ---> CopyOut, running vector operations at high speed while maintaining FP32 precision on the Unified Buffer (UB) minimizes bandwidth load with HBM (global memory).
+
+
+---Mali---
+Replacement from Warp Shuffle to "Work-Group & Local Memory":
+Instead of relying on NVIDIA's __shfl_down_sync or hardware vector register-to-register reductions like CANN, replace it with a tree-type reduction using Work-Groups (typically size 64 to 256) and Local Memory (__local / shared) in OpenCL / Vulkan, where Mali operates most efficiently. This allows safely calculating global and local directional consensus (directional average) without depending on hardware thread width constraints (such as Warp 32 limits).
+
+Continuation of Pseudo-Random Numbers Based on Lightweight Thread Indices:
+Since complex built-in functions may not be available in Mali's compute shader environment, the CUDA bit-shuffle expression is ported as-is to OpenCL integer operations (hash-based operations using get_global_id(0), e.g., multiplication-based with 1664525u). This perfectly reproduces "Stochastic Rounding" without putting pressure on the ALU pipeline of mobile/embedded environments.
+
+Utilization of Vector Types to Prevent Register Spilling:
+Mali GPUs (Bifrost / Valhall / Immortalis architectures) efficiently process vector data type operations like float4 at the hardware level. Rather than running element-by-element processing as scalars, loading, computing, and storing in batches of float4 or half4 wherever possible extracts maximum throughput even on mobile environments and edge devices with narrow memory bandwidth.
+
+
+---QNN / Hexagon NPU---
+Target:
+Snapdragon's Adreno GPU and Hexagon NPU
+Approach:
+When running an "optimized optimizer weight update step" like QPOLA on a device alone (on-device learning or fine-tuning), it must be incorporated as a custom operation (Custom Op) in the Qualcomm AI Engine Direct (QNN) SDK or SNPE (Snapdragon Neural Processing Engine).
+Since NPUs are fundamentally specialized for high-speed computation of fixed-point or special quantization formats (INT4/INT8, etc.), how to map QPOLA's "Stochastic Rounding" and "dynamics according to the degree of alignment collision" to NPU-side vector operation instructions or DSP code, or how to delegate processing to the CPU/GPU side, serves as an important guideline.
+
+
+---macOS / iOS / Metal Shading Language (MSL)---
+Target:
+Apple SoCs (M1/M2/M3/M4, etc.), utilizing PyTorch's MPS (Metal Performance Shaders) backend or proprietary frameworks like MLX.
+Approach:
+The equivalent of a CUDA custom kernel will be a compute shader written in Metal Shading Language (MSL).
+There is no concept of a warp; implementation must be rewritten using Threadgroups (typically thread configurations of 32 or 256) and Threadgroup Memory (equivalent to shared memory).
+Since low-bit quantization (FP8, int8, etc.) support status varies depending on hardware generations (some M-series), fallback processing on the host side (Python/MPS) must be considered.
+
+
+---ROCm---
+For ROCm (AMD / HIP): ROCm has very high compatibility with NVIDIA CUDA (API semantics), resulting in the least source code-level rewriting.
+Approach:
+Change the extension from .cu to .hip, and replace CUDA runtime functions and types with ROCm equivalents. Running the conversion tool (hipify-perl or hipify-clang) as-is automatically converts the majority of the code.
+Header Replacement:
+Change headers such as #include <cuda_runtime.h> ---> #include <hip/hip_runtime.h>, and also change low-bit type headers to ROCm-supported headers (hip_fp16.h, hip_bfloat16.h, etc.).
+Warp Size Difference (Important): As noted in the comments within the code, NVIDIA is always 32, whereas AMD (CDNA/RDNA architectures) has a Warp size (Wavefront size) of either 32 or 64 (RDNA is 32, CDNA is predominantly 64). It is necessary to ensure that #define WARP_SIZE 32 in the code can be dynamically or statically switched to 64 according to the target hardware, or to verify that wavefront size-dependent shuffle processing functions correctly.
+
+
+---iPEX---
+Intel's oneAPI / SYCL provides a tool (Intel DPC++ Compatibility Tool / dpct) to assist direct migration from CUDA, enabling efficient porting.
+Approach:
+Fall back to SYCL (C++ based programming model) or Intel's PyTorch custom kernel implementation (C++ Extension).
+Differences in Warp (Sub-group) Concepts:
+Intel GPU hardware has variable Sub-group (equivalent to NVIDIA's Warp) sizes such as 16, 32, or 64 depending on the architecture. Therefore, shuffle instructions assuming a fixed WARP_SIZE (such as __shfl_down_sync) must be rewritten into SYCL's sub_group features or group operations like intel::ballot / permute.
