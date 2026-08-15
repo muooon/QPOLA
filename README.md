@@ -15,7 +15,9 @@ Why can we abandon Glocking ?
 readme：[English](README.md) | [日本語](README_JA.md)  
 
 
-For code porting, please check here：[English](universal/logical_design_ENG.txt) | [日本語](universal/logical_design_JPN.txt)  
+For code porting, please check here：[English](https://huggingface.co/muooon/QPOLA/raw/main/universal/logical_design_ENG.txt) | [日本語](https://huggingface.co/muooon/QPOLA/raw/main/universal/logical_design_JPN.txt)  
+
+CANN-Ascend prototype：[code](https://github.com/muooon/QPOLA/tree/main/universal)  
 
 
 <img width="800" alt="qpola001" src="https://github.com/user-attachments/assets/1eb7e8b5-1542-439c-bbe3-19b5c392aac0" />
