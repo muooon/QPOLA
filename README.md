@@ -71,8 +71,8 @@ Official Code:
 https://github.com/muooon/QPOLA  
 
 paper:  
-[English] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(ENG)260803.txt  
-[日本語] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(JPN)260803.txt  
+[English] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(ENG).txt  
+[日本語] https://huggingface.co/muooon/QPOLA/raw/main/qpola-paper(JPN).txt  
 
 ---
 
