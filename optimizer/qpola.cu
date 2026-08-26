@@ -1,5 +1,5 @@
 // =========================================================================
-// QPOLA カーネルコア v1.0.4 260724 by muooon https://github.com/muooon/QPOLA
+// QPOLA カーネルコア v1.0.5 260824 by muooon https://github.com/muooon/QPOLA
 // =========================================================================
 
 #include <cuda_runtime.h>
@@ -51,7 +51,7 @@ template <> struct TypeTraits<__half> {
 
 template <> struct TypeTraits<__nv_bfloat16> {
     // bf16 有効値 [-65504.0, 65504.0]／LSB(最下位ビット)
-    static __device__ __forceinline__ float clamp_max() { return 65504.0f; }
+    static __device__ __forceinline__ float clamp_max() { return 3.4e38f; }
     static __device__ __forceinline__ float lsb_step()  { return 0.0f; }
     static __device__ __forceinline__ float lim_g_hat() { return 8.0f; }
 };

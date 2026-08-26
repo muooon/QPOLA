@@ -790,9 +790,9 @@ $L__BB2_8:
 	abs.f32 	%f132, %f131;
 	setp.lt.f32 	%p29, %f132, 0f7F800000;
 	selp.f32 	%f133, %f131, %f7, %p29;
-	mov.f32 	%f134, 0f477FE000;
+	mov.f32 	%f134, 0f7F7FC99E;
 	min.f32 	%f135, %f134, %f133;
-	mov.f32 	%f136, 0fC77FE000;
+	mov.f32 	%f136, 0fFF7FC99E;
 	max.f32 	%f137, %f136, %f135;
 	mov.b32 	%r62, %f137;
 	and.b32  	%r63, %r62, 2147483647;
