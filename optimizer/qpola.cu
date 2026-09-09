@@ -1,5 +1,5 @@
 // =========================================================================
-// QPOLA カーネルコア v1.0.5 260824 by muooon https://github.com/muooon/QPOLA
+// QPOLA カーネルコア v1.0.6 260909 by muooon https://github.com/muooon/QPOLA
 // =========================================================================
 
 #include <cuda_runtime.h>
@@ -40,6 +40,7 @@ template <> struct TypeTraits<float> {
     static __device__ __forceinline__ float clamp_max() { return 3.4e38f; }
     static __device__ __forceinline__ float lsb_step()  { return 0.0f; }
     static __device__ __forceinline__ float lim_g_hat() { return 16.0f; }
+    static __device__ __forceinline__ float min_factor(){ return 1e-5; }
 };
 
 template <> struct TypeTraits<__half> {
@@ -47,6 +48,7 @@ template <> struct TypeTraits<__half> {
     static __device__ __forceinline__ float clamp_max() { return 65504.0f; }
     static __device__ __forceinline__ float lsb_step()  { return 0.0f; }
     static __device__ __forceinline__ float lim_g_hat() { return 8.0f; }
+    static __device__ __forceinline__ float min_factor(){ return 1e-4; }
 };
 
 template <> struct TypeTraits<__nv_bfloat16> {
@@ -54,6 +56,7 @@ template <> struct TypeTraits<__nv_bfloat16> {
     static __device__ __forceinline__ float clamp_max() { return 3.4e38f; }
     static __device__ __forceinline__ float lsb_step()  { return 0.0f; }
     static __device__ __forceinline__ float lim_g_hat() { return 8.0f; }
+    static __device__ __forceinline__ float min_factor(){ return 1e-5; }
 };
 
 template <> struct TypeTraits<signed char> {
@@ -61,6 +64,7 @@ template <> struct TypeTraits<signed char> {
     static __device__ __forceinline__ float clamp_max() { return 127.0f; }
     static __device__ __forceinline__ float lsb_step()  { return 1.0f; }
     static __device__ __forceinline__ float lim_g_hat() { return 2.0f; }
+    static __device__ __forceinline__ float min_factor(){ return 1e-2; }
 };
 
 template <> struct TypeTraits<__nv_fp8_e4m3> {
@@ -68,6 +72,7 @@ template <> struct TypeTraits<__nv_fp8_e4m3> {
     static __device__ __forceinline__ float clamp_max() { return 448.0f; }
     static __device__ __forceinline__ float lsb_step()  { return 0.0625f; }
     static __device__ __forceinline__ float lim_g_hat() { return 4.0f; }
+    static __device__ __forceinline__ float min_factor(){ return 1e-2; }
 };
 
 template <> struct TypeTraits<__nv_fp8_e5m2> {
@@ -75,6 +80,7 @@ template <> struct TypeTraits<__nv_fp8_e5m2> {
     static __device__ __forceinline__ float clamp_max() { return 57344.0f; }
     static __device__ __forceinline__ float lsb_step()  { return 0.25f; }
     static __device__ __forceinline__ float lim_g_hat() { return 4.0f; }
+    static __device__ __forceinline__ float min_factor(){ return 1e-2; }
 };
 
 /*
@@ -84,6 +90,7 @@ template <> struct TypeTraits<__nv_fp4_e2m1> {
     static __device__ __forceinline__ float clamp_max() { return 6.0f; }
     static __device__ __forceinline__ float lsb_step()  { return 0.5f; } // 最小刻み
     static __device__ __forceinline__ float lim_g_hat() { return 2.0f; }
+    static __device__ __forceinline__ float min_factor(){ return 1e-1; }
 };
 */
 
@@ -235,9 +242,9 @@ __device__ __forceinline__ void qpola_kernel_impl(
     float diff_macro = fmaxf(0.0f, 1.0f - macro_align);
     float conflict   = (diff_micro + diff_macro) * 0.5f; // 0.0(完全一致) ～ 2.0(完全反転)
 
-    // 5. 減衰係数の算出(途中で変数の意味を変えず1step計算)
-    constexpr float min_factor = 0.01f;
-    constexpr float decay_rate = (1.0f - min_factor) * 0.5f;
+    // 5. 減衰係数の算出(途中で変数の意味を変えず1step計算／型ごとのmin_factorを動的取得)
+    const float min_factor = TypeTraits<T>::min_factor();
+    const float decay_rate = (1.0f - min_factor) * 0.5f;
     
     // Conflict に応じ 1.0 〜 min_factor の間で素直にクランプ
     float raw_adaptation = 1.0f - conflict * decay_rate;

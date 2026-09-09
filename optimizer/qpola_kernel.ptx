@@ -257,9 +257,9 @@ $L__BB0_8:
 	mul.f32 	%f121, %f134, 0fC1800000;
 	mul.f32 	%f122, %f121, %f14;
 	mul.f32 	%f123, %f8, 0fBF000000;
-	fma.rn.f32 	%f124, %f123, 0f3EFD70A4, 0f3F800000;
+	fma.rn.f32 	%f124, %f123, 0f3EFFFF58, 0f3F800000;
 	mov.f32 	%f125, 0f3F800000;
-	mov.f32 	%f126, 0f3C23D70A;
+	mov.f32 	%f126, 0f3727C5AC;
 	max.f32 	%f127, %f124, %f126;
 	min.f32 	%f128, %f127, %f125;
 	fma.rn.f32 	%f129, %f128, %f122, %f7;
@@ -515,9 +515,9 @@ $L__BB1_8:
 	mul.f32 	%f124, %f140, 0fC1000000;
 	mul.f32 	%f125, %f124, %f14;
 	mul.f32 	%f126, %f8, 0fBF000000;
-	fma.rn.f32 	%f127, %f126, 0f3EFD70A4, 0f3F800000;
+	fma.rn.f32 	%f127, %f126, 0f3EFFF972, 0f3F800000;
 	mov.f32 	%f128, 0f3F800000;
-	mov.f32 	%f129, 0f3C23D70A;
+	mov.f32 	%f129, 0f38D1B717;
 	max.f32 	%f130, %f127, %f129;
 	min.f32 	%f131, %f130, %f128;
 	fma.rn.f32 	%f132, %f131, %f125, %f7;
@@ -781,9 +781,9 @@ $L__BB2_8:
 	mul.f32 	%f123, %f140, 0fC1000000;
 	mul.f32 	%f124, %f123, %f14;
 	mul.f32 	%f125, %f8, 0fBF000000;
-	fma.rn.f32 	%f126, %f125, 0f3EFD70A4, 0f3F800000;
+	fma.rn.f32 	%f126, %f125, 0f3EFFFF58, 0f3F800000;
 	mov.f32 	%f127, 0f3F800000;
-	mov.f32 	%f128, 0f3C23D70A;
+	mov.f32 	%f128, 0f3727C5AC;
 	max.f32 	%f129, %f126, %f128;
 	min.f32 	%f130, %f129, %f127;
 	fma.rn.f32 	%f131, %f130, %f124, %f7;
