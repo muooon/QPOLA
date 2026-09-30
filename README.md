@@ -3,10 +3,10 @@
 ### QPOLARIS (Quantization n Polar-Aligned Resetting Instant Zero-Master Weight SGD)  
 #### Quantization‑resilient, history‑free, spatially coordinated (polar coordinates / QJL) self‑adaptive Zero-Master Weight SGD  
 
-#### QPOLA (v1.0.4 / Moment-Free) fp8/int8 supported  ※ 4‑bit unsupported due to CUDA characteristics  
+#### QPOLA (v1.0.6 / Moment-Free) fp8/int8 supported  ※ 4‑bit unsupported due to CUDA characteristics  
 ##### CUDA itself does not support 4‑bit, but QPOLA can still operate in low precision via STE and AMP  
 
-A somewhat unusual optimizer — experimental, yet practical.  
+A somewhat unusual optimizer — experimental, yet practical. (Generally usable with AdamW (LR-equivalent))  
 
 Why did we abandon the history (inertia) ?  
 Why are we abandon the scheduler ?  
@@ -89,13 +89,14 @@ usage ／ 使い方
 Please place qpola.py and qpola_kernel.ptx in the same folder.  
 
 ### Quick Start & Recommended Learning Rates (LR)  
-QPOLA uses a larger learning rate (LR) than conventional optimizers (it functions as a maximum value).  
+QPOLA allows for a slightly larger learning rate (LR) than conventional optimizers (it functions as a maximum value).  
 
-*   For low‑precision / quantized models, reduce the LR. Training typically proceeds stably around LR: 1e‑3 (LoRA).  
-*   For pre‑training or full fine‑tuning, lower the LR to an appropriate scale such as LR: 1e‑4 (Pre & FT).  
+*   For low‑precision / quantized models, reduce the LR. Training typically proceeds stably around LR: 1e‑4 (LoRA/PreTrain).  
+*   For pre‑training or full fine‑tuning, lower the LR to an appropriate scale such as LR: 1e‑6 (FT/FullRank).  
+*   For pre-training, please consider initialization using a truncated normal distribution.  
 
 It prioritizes generality, autonomy, and adaptability in pursuit of new paths for optimization, efficiency, and simplicity.  
-In its development, we deeply appreciate the insights of those who came before us—and continue to explore new possibilities beyond them.  
+In its development, we express our deep gratitude for the insights and achievements of those who came before us, and we will carry on their legacy while continuing to explore new possibilities.  
 
 ---
 
@@ -103,7 +104,7 @@ To explain QPOLA in a bit more detail:
 
 1. Loss (Global Judgment Field) as an "Archive of All History"  
 
-In the machine learning training process, the Loss at the current step is not merely a scalar value; it is the "destination of results" that compresses and reflects the "entire parameter trajectory and gradient history" (the complete history) from the "initial state up to the present."  
+In machine learning training, the current loss and weights aren't just isolated numbers—they represent the final destination, compressing the full history of every weight movement and gradient since the start.  
 
 QPOLA does not have explicit optimizer states (buffer memory); instead, it always trusts only the "weights and distortions" of the entire past trajectory through the top-level global judgment field known as Loss.  
 
