@@ -92,7 +92,7 @@ Please place qpola.py and qpola_kernel.ptx in the same folder.
 QPOLA allows for a slightly larger learning rate (LR) than conventional optimizers (it functions as a maximum value).  
 
 *   For low‑precision / quantized models, reduce the LR. Training typically proceeds stably around LR: 1e‑4 (LoRA/PreTrain).  
-*   For pre‑training or full fine‑tuning, lower the LR to an appropriate scale such as LR: 1e‑6 (FT/FullRank).  
+*   For full fine‑tuning, lower the LR to an appropriate scale such as LR: 1e‑6 (FT/FullRank).  
 *   For pre-training, please consider initialization using a truncated normal distribution.  
 
 It prioritizes generality, autonomy, and adaptability in pursuit of new paths for optimization, efficiency, and simplicity.  
