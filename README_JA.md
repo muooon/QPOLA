@@ -3,8 +3,8 @@
 #### QPOLARIS (Quantization n Polar-Aligned Resetting Instant Zero-Master Weight SGD)  
 ##### 量子化に強い、履歴ゼロ、空間協調(極座標･QJL)、Zero-Master Weight による自己適応型SGD  
 
-##### QPOLA (v1.0.6 / Moment-Free) fp8/int8 対応済  ※ CUDA特性のため4bit未対応  
-###### CUDA は 4bit 未対応ですが QPOLA は STE･AMP で低精度に対応可です  
+##### QPOLA (v1.1.0 / Moment-Free) Universal Edition (PyTorch版) fp8/int8 対応済  
+###### 現在 4bit 未対応ですが QPOLA は STE･AMP で低精度に対応可です  
 
 ちょっと特殊な optimizer です、実験的です、でも実用的です、(概ね AdamW(LR同値) で使えます)、  
 
@@ -36,7 +36,7 @@ CANN-Ascend prototype：[code](https://github.com/muooon/QPOLA/tree/main/univers
 では、どうやって｢慣性なし｣で学習を進ませるのか？  
 
 QPOLA は、時間軸の履歴(過去の勾配)の代わりに、空間の協調を使います、  
-パラメータ空間において、GPUのハードウェア階層である｢ミクロ｣(32/Warp)と｢マクロ｣(256/Block)の差分をリアルタイムに比較するのです、  
+パラメータ空間において、GPUのハードウェア階層である｢ミクロ｣(32/Warp)と｢マクロ｣(256/Block)等のハードウェア特性からの差分をリアルタイムに比較するのです、  
 このマクロとミクロの比較だけで｢バラバラな方向｣を向いた｢ノイズ｣は互いに打ち消し合い、｢同じ方向｣に一貫して流れる｢本質｣(差分)だけ自動的に浮かび上がります、  
 (つまり １次２次moment の代替として機能します、ノイズなしで正確な本質だけ、ただ比較するだけ…)  
 これは、大バッチ学習やVAEの潜在空間が、ノイズを相殺し本質をあぶり出すように QPOLA は｢空間の広がり｣から本質の方向を見つけ信じ進みはじめます、  
@@ -80,13 +80,11 @@ paper:
 Licensed under the **Apache License 2.0**. Feel free to use, modify, and distribute.  
 
 ### Repository Structure  
-*   `qpola.py` (PyTorch Integration)  
-*   `qpola.cu` (Raw CUDA Source) - Feel free to audit  
-*   `qpola_kernel.ptx` (Optimized PTX)  
+*   `qpola.py` (PyTorch Universal Edition)  
 
 usage ／ 使い方  
 --optimizer_type=optimizer.qpola.QPOLA  
-Please place qpola.py and qpola_kernel.ptx in the same folder.  
+not CUDA Kernel, not PTX Code, not Hardware-specific.   
 
 ### Quick Start & Recommended Learning Rates (LR)  
 QPOLAは従来のオプティマイザよりも少し大きな学習率(LR)を設定できます(最大値として機能します)  
@@ -104,6 +102,13 @@ In its development, we express our deep gratitude for the insights and achieveme
 ---
 
 QPOLA について、もう少し詳しく説明すると、  
+
+0. 重みの経験(履歴)は自己組織化へ繋がる
+
+想像してください、従来手法の１次２次moments(履歴)の影響を受けた重み、この履歴が同じ重みが複数存在するはずです、  
+QPOLA では、局所判定場とコヒーレンス(位相整合)の影響を受けた重み、この作用(圧縮履歴)で同じ重みが複数生まれます、  
+つまりMLにおける更新は、すべての重みにとって自由度が大きすぎる状態(カオス) から、定着(収束)へと向かい、重みの自由度を小さくしていく過程ではないでしょうか、  
+その自由度を縛るのは履歴による重みの自己組織化や集団化であると考えます、履歴という粘性か、空間的な粘性か、従来手法とQPOLAの違いはここにあります、  
 
 1. Loss(大域的判定場)という｢全履歴のアーカイブ｣  
 
@@ -127,6 +132,6 @@ QPOLA のコードにある｢ミクロ(warp/block)局所アライメント｣�
 
 3. ｢メモリに頼らない慣性｣というパラダイムシフト  
 
-AdamWの慣性：過去の勾配を｢ただの数値の足し算の履歴｣(EMA)としてメモリに保存する、いわば機械的な外部記憶(人工的な慣性)です  
+既存手法の慣性：過去の勾配を｢ただの数値の足し算の履歴｣(EMA)としてメモリに保存する、いわば機械的な外部記憶(人工的な慣性)です  
 
 QPOLAの自発的慣性：メモリ(履歴)に頼らず、系全体のエネルギー勾配(Loss)と局所的なアライメントの衝突(Conflict)のダイナミクスを通じ、システムが動的に生み出し続ける自発的慣性です  

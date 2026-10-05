@@ -3,8 +3,8 @@
 ### QPOLARIS (Quantization n Polar-Aligned Resetting Instant Zero-Master Weight SGD)  
 #### Quantization‑resilient, history‑free, spatially coordinated (polar coordinates / QJL) self‑adaptive Zero-Master Weight SGD  
 
-#### QPOLA (v1.0.6 / Moment-Free) fp8/int8 supported  ※ 4‑bit unsupported due to CUDA characteristics  
-##### CUDA itself does not support 4‑bit, but QPOLA can still operate in low precision via STE and AMP  
+#### QPOLA (v1.1.0 / Moment-Free) Universal Edition (PyTorch version) supported fp8/int8.  
+##### Although 4-bit is not currently supported, QPOLA supports low precision via STE and AMP.  
 
 A somewhat unusual optimizer — experimental, yet practical. (Generally usable with AdamW (LR-equivalent))  
 
@@ -36,7 +36,7 @@ The belief that “learning cannot progress without inertia” is probably just 
 So then, how do we make learning progress without inertia?  
 
 QPOLA uses spatial coordination instead of temporal history (past gradients).  
-In parameter space, it compares the GPU hardware hierarchy—“micro” (32/Warp) and “macro” (256/Block)—in real time.  
+In the parameter space, it compares in real-time the differences stemming from GPU hardware characteristics, such as the 'micro' (32/Warp) and 'macro' (256/Block) hardware hierarchies.  
 By comparing macro and micro alignment alone, gradients pointing in “different directions” (noise) cancel each other out, while only the “consistent direction” (the essential signal) automatically emerges.  
 (This functions as a substitute for 1st and 2nd moments: no noise, only the true essential direction, simply by comparing spatial structure…)  
 Just as large‑batch training or VAE latent spaces cancel noise and reveal underlying structure, QPOLA finds and follows the essential direction from the “spatial extent” of the gradient field.  
@@ -80,13 +80,11 @@ paper:
 Licensed under the **Apache License 2.0**. Feel free to use, modify, and distribute.  
 
 ### Repository Structure  
-*   `qpola.py` (PyTorch Integration)  
-*   `qpola.cu` (Raw CUDA Source) - Feel free to audit  
-*   `qpola_kernel.ptx` (Optimized PTX)  
+*   `qpola.py` (PyTorch Universal Edition)  
 
 usage ／ 使い方  
 --optimizer_type=optimizer.qpola.QPOLA  
-Please place qpola.py and qpola_kernel.ptx in the same folder.  
+not CUDA Kernel, not PTX Code, not Hardware-specific.  
 
 ### Quick Start & Recommended Learning Rates (LR)  
 QPOLA allows for a slightly larger learning rate (LR) than conventional optimizers (it functions as a maximum value).  
@@ -101,6 +99,16 @@ In its development, we express our deep gratitude for the insights and achieveme
 ---
 
 To explain QPOLA in a bit more detail:  
+
+0. Weight Experience (History) Leads to Self-Organization  
+
+Imagine weights influenced by the first and second moments (history) in conventional methods—surely, multiple weights share the same history.  
+
+In QPOLA, weights are shaped by the local decision field and coherence (phase alignment); through this action (compressed history), multiple identical weights emerge.  
+
+In other words, aren't weight updates in machine learning a process of moving from a state of excessive degrees of freedom (chaos) for all weights toward stabilization (convergence), thereby reducing the degrees of freedom of the weights?  
+
+believe that what constrains these degrees of freedom is the self-organization and clustering of weights driven by history. Whether it is the viscosity of history or spatial viscosity—herein lies the fundamental difference between conventional methods and QPOLA.  
 
 1. Loss (Global Judgment Field) as an "Archive of All History"  
 
@@ -124,6 +132,6 @@ This self-contained feedback loop—governed by "lower-level local fluctuations 
 
 3. A Paradigm Shift: "Inertia Independent of Memory"  
 
-AdamW's Inertia: Saves past gradients in memory as "merely a history of numerical additions" (EMA), which is essentially an external mechanical storage (artificial inertia).  
+conventional methods Inertia: Saves past gradients in memory as "merely a history of numerical additions" (EMA), which is essentially an external mechanical storage (artificial inertia).  
 
 QPOLA's Spontaneous Inertia: A spontaneous inertia continuously generated dynamically by the system through the dynamics of the overall system's energy gradients (Loss) and local alignment conflicts, without relying on memory (history).  
