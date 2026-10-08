@@ -2,8 +2,8 @@ import torch
 from torch.optim import Optimizer
 
 """
-QPOLA v1.1.0 Universal Edition 261005 (PyTorch版･Moment-Free) fp8/int8 対応済
-(Pure PyTorch & Strict Layer & Padding-Guard, Cross-Device, AMP Supported)
+QPOLA v1.1.1 Universal Edition 261008 (PyTorch版･Moment-Free) fp8/int8 対応済
+(Pure PyTorch, Strict Layer, Zero-Safe, Cross-Device, AMP Supported)
 Quantization n Polar-Aligned Resetting Instant Zero-Master Weight SGD
 量子化に強い、履歴ゼロ、空間協調(極座標･QJL)、Zero-Master Weight による自己適応型SGD
 QPOLAは従来のオプティマイザよりも大きな学習率(LR)を設定します(最大値として機能します)
@@ -107,17 +107,28 @@ class QPOLA(Optimizer):
                 g_val = torch.nan_to_num(g_val, nan=0.0, posinf=0.0, neginf=0.0)
                 p_val = torch.nan_to_num(p_val, nan=0.0, posinf=0.0, neginf=0.0)
 
-                # ゼロパディング (有効ではない要素) を計算に含めないためのマスク処理
-                is_active = (g_val != 0.0)
-                active_count = is_active.sum().clamp(min=1.0).float()
+                # CUDA版互換：全要素を有効とし、方向・スケールを分母に含める(sign/abs 自然に0)
+                # 第0次元方式：第0軸を独立単位とし、これ以外の軸をmicro空間として集計
+                if p_val.ndim >= 2:
+                    reduce_dims = tuple(range(1, p_val.ndim))
+                    active_count = 1
+                    for d in reduce_dims:
+                        active_count *= p_val.shape[d]
+                    active_count = float(active_count)
+                else:
+                    active_count = float(p_val.numel())
 
                 # 勾配の方向 (符号) と絶対値
                 g_sign = torch.sign(g_val)
-                g_abs = torch.abs(g_val)
+                g_abs  = torch.abs(g_val)
 
-                # レイヤー等をまたがない独立した空間集計(0パディング除外)
-                micro_direction_sum = (g_sign * is_active.float()).sum()
-                warp_g_scale_sum = (g_abs * is_active.float()).sum()
+                # レイヤー内・チャネル内またぎをしない独立した空間集計
+                if p_val.ndim >= 2:
+                    micro_direction_sum = g_sign.sum(dim=reduce_dims, keepdim=True)
+                    warp_g_scale_sum    = g_abs.sum(dim=reduce_dims, keepdim=True)
+                else:
+                    micro_direction_sum = g_sign.sum()
+                    warp_g_scale_sum    = g_abs.sum()
 
                 micro_direction_mean = micro_direction_sum / active_count
                 warp_g_scale = warp_g_scale_sum / active_count
@@ -125,7 +136,7 @@ class QPOLA(Optimizer):
                 # 空間アライメント (一致度) / Conflict (衝突度) の算出
                 micro_align = g_sign * micro_direction_mean
                 diff_micro = torch.clamp(1.0 - micro_align, min=0.0)
-                conflict = diff_micro * is_active.float()
+                conflict = diff_micro
 
                 # 減衰係数の算出
                 decay_rate = (1.0 - min_factor) * 0.5
