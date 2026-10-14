@@ -1,12 +1,12 @@
 # QPOLA Optimizer  
 
-### QPOLARIS (Quantization n Polar-Aligned Resetting Instant Zero-Master Weight SGD)  
-#### Quantization‑resilient, history‑free, spatially coordinated (polar coordinates / QJL) self‑adaptive Zero-Master Weight SGD  
+### QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)  
+#### Quantization‑resilient, history‑free, spatially coordinated (polar coordinates / QJL) self‑adaptive SGD  
 
-#### QPOLA (v1.0.6 / Moment-Free) fp8/int8 supported  ※ 4‑bit unsupported due to CUDA characteristics  
-##### CUDA itself does not support 4‑bit, but QPOLA can still operate in low precision via STE and AMP  
+##### QPOLA v1.2.0 (Moment-Free / fp32 Only)  
+###### Universal Edition (PyTorch / CUDA / SYCL(AMD･Intel))  
 
-A somewhat unusual optimizer — experimental, yet practical. (Generally usable with AdamW (LR-equivalent))  
+It's a bit of an unconventional optimizer, experimental, and incidentally achieves statelessness.  
 
 Why did we abandon the history (inertia) ?  
 Why are we abandon the scheduler ?  
@@ -16,8 +16,6 @@ readme：[English](README.md) | [日本語](README_JA.md)
 
 
 For code porting, please check here：[English](https://huggingface.co/muooon/QPOLA/raw/main/universal/logical_design_ENG.txt) | [日本語](https://huggingface.co/muooon/QPOLA/raw/main/universal/logical_design_JPN.txt)  
-
-CANN-Ascend prototype：[code](https://github.com/muooon/QPOLA/tree/main/universal)  
 
 
 <img width="800" alt="qpola001" src="https://github.com/user-attachments/assets/1eb7e8b5-1542-439c-bbe3-19b5c392aac0" />
@@ -36,8 +34,8 @@ The belief that “learning cannot progress without inertia” is probably just 
 So then, how do we make learning progress without inertia?  
 
 QPOLA uses spatial coordination instead of temporal history (past gradients).  
-In parameter space, it compares the GPU hardware hierarchy—“micro” (32/Warp) and “macro” (256/Block)—in real time.  
-By comparing macro and micro alignment alone, gradients pointing in “different directions” (noise) cancel each other out, while only the “consistent direction” (the essential signal) automatically emerges.  
+In the parameter space, it compares the differences between the “meso” (layer) structure—which represents the model hierarchy—and the “macro” (loss) in real time.  
+Through this spatial comparison (meso and macro) alone, the “noise” pointing in “different directions” cancels itself out, and only the “essence” (difference)—which flows consistently in the “same direction”—automatically emerges.  
 (This functions as a substitute for 1st and 2nd moments: no noise, only the true essential direction, simply by comparing spatial structure…)  
 Just as large‑batch training or VAE latent spaces cancel noise and reveal underlying structure, QPOLA finds and follows the essential direction from the “spatial extent” of the gradient field.  
 
@@ -80,13 +78,14 @@ paper:
 Licensed under the **Apache License 2.0**. Feel free to use, modify, and distribute.  
 
 ### Repository Structure  
-*   `qpola.py` (PyTorch Integration)  
-*   `qpola.cu` (Raw CUDA Source) - Feel free to audit  
-*   `qpola_kernel.ptx` (Optimized PTX)  
+*   `qpola.py` (Universal Edition)  
 
 usage ／ 使い方  
+Usually, please use the standalone PyTorch version (use the kernel version depending on your use case).  
 --optimizer_type=optimizer.qpola.QPOLA  
-Please place qpola.py and qpola_kernel.ptx in the same folder.  
+(CUDA) Please place qpola.py and qpola_kernel.ptx in the same folder.  
+--optimizer_type=optimizer.qpola_sycl.QPOLA  
+(SYCL) Please place qpola_sycl.py and qpola_kernel_sycl.dll/so in the same folder.  
 
 ### Quick Start & Recommended Learning Rates (LR)  
 QPOLA allows for a slightly larger learning rate (LR) than conventional optimizers (it functions as a maximum value).  
@@ -102,7 +101,17 @@ In its development, we express our deep gratitude for the insights and achieveme
 
 To explain QPOLA in a bit more detail:  
 
-1. Loss (Global Judgment Field) as an "Archive of All History"  
+0, Weight Experience (History) Leads to Self-Organization  
+
+Imagine weights influenced by the first and second moments (history) in conventional methods—surely, multiple weights share the same history.  
+
+In QPOLA, weights are shaped by the local decision field and coherence (phase alignment); through this action (compressed history), multiple identical weights emerge.  
+
+In other words, aren't weight updates in machine learning a process of moving from a state of excessive degrees of freedom (chaos) for all weights toward stabilization (convergence), thereby reducing the degrees of freedom of the weights?  
+
+believe that what constrains these degrees of freedom is the self-organization and clustering of weights driven by history. Whether it is the viscosity of history or spatial viscosity—herein lies the fundamental difference between conventional methods and QPOLA.  
+
+1, Loss (Global Judgment Field) as an "Archive of All History"  
 
 In machine learning training, the current loss and weights aren't just isolated numbers—they represent the final destination, compressing the full history of every weight movement and gradient since the start.  
 
@@ -110,20 +119,22 @@ QPOLA does not have explicit optimizer states (buffer memory); instead, it alway
 
 In other words, rather than "discarding the past," QPOLA can be described as "instantly re-projecting (self-organizing) the entire history at every step through the 'gradients' descending from Loss, which is the complete past history."  
 
-2. "Spontaneous Inertia" Generated by Dynamic Adaptation via Local Judgment Fields and Spatial Coherence (Phase Synchronization)  
+2, "Spontaneous Inertia" Generated by Dynamic Adaptation via Local Judgment Fields and Spatial Coherence (Phase Synchronization)  
 
-The interaction between the "micro (warp/block) local alignment" and "macro (loss) global" levels in the QPOLA code, along with spatial-axis consensus (consensus building), generates "spontaneous inertia."  
+The interaction between the "meso local"(layer) and "macro global"(loss) levels in the QPOLA code, along with spatial-axis consensus (consensus building), generates "spontaneous inertia."  
 
-Local Judgment Fields (Conflicts and Alignment): Evaluates in real-time how individual parameters or local vectors align with the direction of surrounding gradients, dynamically altering fluctuations (jitter) and the adaptation factor.  
+Local judgment field (conflict or alignment): Dynamically evaluates how individual parameters or local vectors align with the surrounding gradient direction in real-time, adjusting the adaptation factor accordingly.  
 
 Global Judgment Field (Loss / Overall Trend): Loss fluctuates as the aggregate result of these local behaviors, rewriting the very gradients that descend next.  
 
-Note: This mechanism extracts vectors and reflects differences using warps/blocks, and can be ported (mathematically equivalent) to other hardware by directly utilizing vectors, etc.  
+Note: The CUDA version extracts vectors and reflects differences using warps/blocks, and can be ported (mathematically equivalent) to other hardware by directly utilizing vectors, etc.  
 
 This self-contained feedback loop—governed by "lower-level local fluctuations and self-organization" and "upper-level global Loss gradient allocation"—possesses a novel mathematical structure that stabilizes systems by utilizing spatial phase alignment (coherence) instead of temporal history (momentum).  
 
-3. A Paradigm Shift: "Inertia Independent of Memory"  
+3, A Paradigm Shift: "Inertia Independent of Memory"  
 
-AdamW's Inertia: Saves past gradients in memory as "merely a history of numerical additions" (EMA), which is essentially an external mechanical storage (artificial inertia).  
+conventional methods Inertia: Saves past gradients in memory as "merely a history of numerical additions" (EMA), which is essentially an external mechanical storage (artificial inertia).  
 
 QPOLA's Spontaneous Inertia: A spontaneous inertia continuously generated dynamically by the system through the dynamics of the overall system's energy gradients (Loss) and local alignment conflicts, without relying on memory (history).  
+
+Natural Warm-up and Weight Decay: While traditionally warm-up and weight decay were specified somewhat arbitrarily, QPOLA incorporates them naturally and autonomously.  
