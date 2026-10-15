@@ -9,12 +9,19 @@ QPOLA v1.2.0 261015 CUDA Origin Edition (fp32 Only / Moment-Free)
 QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)
 量子化に強い、履歴ゼロ、空間協調 (極座標･QJL) による 自己適応型SGD
 推奨学習率： 1e-4(Pre･LoRA) / 1e-6(微調整) 程度でお試しください
+事前学習では｢切断正規分布｣による初期化を検討してください
 この仕組みは瞬時的な｢勾配の分解と再構成｣を行います(複次的に｢VRAM負荷削減｣になりました)
 """
 
 # usage ／ 使い方
 # --optimizer_type=optimizer.qpola.QPOLA
 # Please place qpola.py and qpola_kernel.ptx in the same folder.
+
+# compile ／ コンパイル
+# Linux：
+# nvcc -Xcompiler "-fPIC" -ptx -o qpola_kernel.ptx qpola.cu
+# Windows：
+# nvcc -Xcompiler "/utf-8" -ptx -o qpola_kernel.ptx qpola.cu
 
 
 current_dir = os.path.dirname(os.path.abspath(__file__))

@@ -5,11 +5,12 @@ import torch
 from torch.optim import Optimizer
 
 """
-QPOLA v1.2.0 261010 SYCL Multi-Vendor Edition (fp32 Only / Moment-Free)
+QPOLA v1.2.0 261015 SYCL Multi-Vendor Edition (fp32 Only / Moment-Free)
 QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)
 量子化に強い、履歴ゼロ、空間協調 (極座標･QJL) による 自己適応型SGD
 対応環境：NVIDIA(CUDA)、AMD(ROCm / HIP)、Intel(iPEX / XPU)、(SYCL 2020 準拠)
-既存オプティマイザと同程度のLR：1e-4程度(Pre･LoRA) / FTはLR：1e-6程度(微調整)でお試しください
+推奨学習率： 1e-4(Pre･LoRA) / 1e-6(微調整) 程度でお試しください
+事前学習では｢切断正規分布｣による初期化を検討してください
 (この仕組みは瞬時的な｢勾配の分解と再構成｣を行います(複次的に｢VRAM負荷削減｣になりました)
 """
 
