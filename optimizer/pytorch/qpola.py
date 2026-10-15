@@ -8,6 +8,7 @@ QPOLA v1.2.0 261015 Pure PyTorch Edition (fp32 Only / Moment-Free)
 QPOLARIS (Quantization n Polar-Aligned Resetting Instant SGD)
 量子化に強い、履歴ゼロ、空間協調 (極座標･QJL) による 自己適応型SGD
 推奨学習率： 1e-4(Pre･LoRA) / 1e-6(微調整) 程度でお試しください
+事前学習では｢切断正規分布｣による初期化を検討してください
 この仕組みは瞬時的な｢勾配の分解と再構成｣を行います(複次的に｢VRAM負荷削減｣になりました)
 """
 
@@ -45,29 +46,38 @@ def _qpola_pure_step_kernel_impl(
     pad_len = (block_size - (n % block_size)) % block_size
     if pad_len > 0:
         g_padded = torch.cat([g_val, g_val.new_zeros(pad_len)])
+        valid_padded = torch.cat([
+            g_val.new_ones(n),
+            g_val.new_zeros(pad_len),
+        ])
     else:
         g_padded = g_val
+        valid_padded = g_val.new_ones(n)
 
     total_padded_len = g_padded.numel()
 
     # ワープ単位(32要素)に分割
     num_warps = total_padded_len // window_size
     g_grouped = g_padded.view(num_warps, window_size)
+    valid_grouped = valid_padded.view(num_warps, window_size)
 
     g_sign_grouped = torch.sign(g_grouped)
-    micro_direction_mean = g_sign_grouped.mean(dim=-1, keepdim=True)
-    warp_g_scale = g_grouped.abs().mean(dim=-1, keepdim=True)
+    valid_count = valid_grouped.sum(dim=-1, keepdim=True).clamp_min(1.0)
+    micro_direction_mean = ((g_sign_grouped * valid_grouped).sum(dim=-1, keepdim=True) / valid_count)
+    warp_g_scale = ((g_grouped.abs() * valid_grouped).sum(dim=-1, keepdim=True) / valid_count)
 
     # ブロック単位(256要素＝8ワープ分)でマクロ集計を再現
     num_blocks = num_warps // warps_per_block
     g_sign_blocks = g_sign_grouped.view(num_blocks, warps_per_block, window_size)
+    valid_blocks = valid_grouped.view(num_blocks, warps_per_block, window_size)
 
     # ブロック内の方向総和 と 有効要素数の算出 (s_block_direction / s_block_active)
-    block_direction_sum = g_sign_blocks.sum(dim=(1, 2), keepdim=True)
-    block_active_count = float(block_size) # ブロック内はパディングも含めて常に固定サイズで処理
+    # ブロック内はパディングも含めて常に固定サイズで処理
+    block_direction_sum = (g_sign_blocks * valid_blocks).sum(dim=(1, 2), keepdim=True)
+    block_active_count = valid_blocks.sum(dim=(1, 2), keepdim=True).clamp_min(1.0)
     
     # ブロックごとのマクロ平均(各ブロック内の256要素で割る)
-    macro_direction_mean_per_block = block_direction_sum / block_active_count
+    macro_direction_mean_per_block = (block_direction_sum / block_active_count)
     
     # 元のワープ単位の形状にブロードキャストして戻す
     macro_direction_mean = macro_direction_mean_per_block.expand(num_blocks, warps_per_block, 1).reshape(num_warps, 1)
