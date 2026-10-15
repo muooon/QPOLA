@@ -35,6 +35,10 @@ def _qpola_pure_step_kernel_impl(
     if n == 0:
         return p_fp32
 
+    # デバイスをここで完全に固定
+    device = p_fp32.device
+    dtype = p_fp32.dtype
+
     g_val = torch.nan_to_num(g_fp32.reshape(-1), nan=0.0, posinf=0.0, neginf=0.0)
     p_val = torch.nan_to_num(p_fp32.reshape(-1), nan=0.0, posinf=0.0, neginf=0.0)
 
@@ -45,14 +49,14 @@ def _qpola_pure_step_kernel_impl(
 
     pad_len = (block_size - (n % block_size)) % block_size
     if pad_len > 0:
-        g_padded = torch.cat([g_val, g_val.new_zeros(pad_len)])
-        valid_padded = torch.cat([
-            g_val.new_ones(n),
-            g_val.new_zeros(pad_len),
-        ])
+        # deviceを明示して確実に同じデバイスに作成させる
+        zeros_pad = torch.zeros(pad_len, dtype=g_val.dtype, device=g_val.device)
+        ones_n = torch.ones(n, dtype=g_val.dtype, device=g_val.device)
+        g_padded = torch.cat([g_val, zeros_pad])
+        valid_padded = torch.cat([ones_n, zeros_pad])
     else:
         g_padded = g_val
-        valid_padded = g_val.new_ones(n)
+        valid_padded = torch.ones(n, dtype=g_val.dtype, device=g_val.device)
 
     total_padded_len = g_padded.numel()
 
@@ -191,6 +195,14 @@ class QPOLA(Optimizer):
     def step(self, closure=None):
         loss = torch.enable_grad()(closure)() if closure is not None else None
 
+        # システムで利用可能なアクセラレータの判定を｢1回だけ｣実施
+        default_accelerator = (
+            torch.device('cuda') if torch.cuda.is_available() 
+            else torch.device('xpu') if (hasattr(torch, 'xpu') and torch.xpu.is_available()) 
+            else torch.device('mps') if (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()) 
+            else torch.device('cpu')
+        )
+
         for group in self.param_groups:
             lr, eps = group['lr'], group['eps']
             for p in group['params']:
@@ -200,21 +212,25 @@ class QPOLA(Optimizer):
                 g = p.grad
                 orig_dtype = p.dtype
 
+                # パラメータがすでにGPU等にあるならそのデバイス、
+                # CPUオフロード等でCPUにいるなら先ほど判定したアクセラレータを使用
+                target_device = p.device if p.device.type != 'cpu' else default_accelerator
+
                 # 高速化：fp32 の場合は不要なキャストやコピーを回避
-                p_fp32 = p if orig_dtype == torch.float32 else p.to(dtype=torch.float32)
-                g_fp32 = g if orig_dtype == torch.float32 else g.to(dtype=torch.float32)
+                p_fp32 = p.to(device=target_device, dtype=torch.float32)
+                g_fp32 = g.to(device=target_device, dtype=torch.float32)
 
                 # キャッシュ済みの warp_size を取得してカーネルに渡す
-                warp_size = self._get_warp_size(p.device)
+                warp_size = self._get_warp_size(target_device)
 
                 # 計算実行 (Compiled / JIT Script)
                 next_p = _qpola_pure_step_kernel(p_fp32, g_fp32, float(lr), float(eps), int(warp_size))
 
                 # 書き戻し （fp16 / bf16 への自動キャスト書き戻し含む）
                 if orig_dtype == torch.float32:
-                    p.copy_(next_p)
+                    p.copy_(next_p.to(device=p.device))
                 else:
-                    p.copy_(next_p.to(dtype=orig_dtype))
+                    p.copy_(next_p.to(device=p.device, dtype=orig_dtype))
 
         # VRAMキャッシュのクリーンアップ制御 (NVIDIA / AMD および Intel 対応)
         # 【選択式】 プールされた未使用VRAMキャッシュの完全解放(クリーンアップ) / 中級者以上向け
